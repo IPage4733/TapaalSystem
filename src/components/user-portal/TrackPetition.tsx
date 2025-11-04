@@ -9,16 +9,19 @@ import {
   CheckCircle,
   Clock,
   AlertTriangle,
-  Eye,
-  Download,
-  ArrowRight,
   MapPin,
   Shield
 } from 'lucide-react';
-import { mockPetitions, mockTappals } from '../../data/mockTappals';
-import { mockUsers } from '../../data/mockUsers';
-import { mockMovements } from '../../data/mockMovements';
 import { formatDate, formatDateTime, getStatusColor } from '../../utils/dateUtils';
+
+// ---------- CONFIG ----------
+const BASE_URL = 'https://ec8jdej696.execute-api.ap-southeast-1.amazonaws.com/dev/newpetition';
+const DEPT_BASE = 'https://1qgedzknw2.execute-api.ap-southeast-1.amazonaws.com/prod/departmentsnew';
+const DEFAULT_HEADERS: Record<string, string> = {
+  'Content-Type': 'application/json',
+  // 'Authorization': 'Bearer <token>',
+};
+// ----------------------------
 
 const TrackPetition: React.FC = () => {
   const [searchType, setSearchType] = useState<'petitionId' | 'mobile'>('petitionId');
@@ -27,7 +30,72 @@ const TrackPetition: React.FC = () => {
   const [showOtpField, setShowOtpField] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<any>(null);
+  const [searchList, setSearchList] = useState<any[] | null>(null); // for phone -> multiple results
   const [error, setError] = useState('');
+
+  // Simple in-memory cache for department lookups to avoid repeated network calls
+  const deptCache: Record<string, any> = (globalThis as any).__deptCache || ((globalThis as any).__deptCache = {});
+
+  const mapPetitionToSearchResult = (petitionApiResponse: any) => {
+    return {
+      petition: {
+        petitionId: petitionApiResponse.petitionId,
+        subject: petitionApiResponse.subject,
+        description: petitionApiResponse.description,
+        fullName: petitionApiResponse.fullName,
+        petitionerPhone: petitionApiResponse.mobileNumber || petitionApiResponse.mobile,
+        aadharNumber: petitionApiResponse.aadharNumber,
+        address: petitionApiResponse.address,
+        attachments: petitionApiResponse.attachments || [],
+        status: petitionApiResponse.status || petitionApiResponse.petitionStatus || 'Submitted',
+        createdAt: petitionApiResponse.createdAt,
+        dueDate: petitionApiResponse.dueDate,
+        // departmentName will be filled later by fetchDepartment if only id is present
+        departmentName: petitionApiResponse.departmentName || '',
+        departmentId: petitionApiResponse.department || petitionApiResponse.departmentId || '',
+        isConfidential: petitionApiResponse.isConfidential || false
+      },
+      tappal: null,
+      movements: [],
+      currentOfficer: null
+    };
+  };
+
+  const fetchByPetitionId = async (petitionId: string) => {
+    const url = `${BASE_URL}/${encodeURIComponent(petitionId)}`;
+    const res = await fetch(url, { headers: DEFAULT_HEADERS });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Server responded ${res.status}${text ? `: ${text}` : ''}`);
+    }
+    return res.json();
+  };
+
+  const fetchByPhone = async (phone: string) => {
+    const url = `${BASE_URL}/phone/${encodeURIComponent(phone)}`;
+    const res = await fetch(url, { headers: DEFAULT_HEADERS });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Server responded ${res.status}${text ? `: ${text}` : ''}`);
+    }
+    return res.json();
+  };
+
+  const fetchDepartment = async (deptId: string) => {
+    if (!deptId) return null;
+    // return cached if available
+    if (deptCache[deptId]) return deptCache[deptId];
+
+    const url = `${DEPT_BASE}/${encodeURIComponent(deptId)}`;
+    const res = await fetch(url, { headers: DEFAULT_HEADERS });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Dept API ${res.status}${text ? `: ${text}` : ''}`);
+    }
+    const data = await res.json();
+    deptCache[deptId] = data;
+    return data;
+  };
 
   const handleSearch = async () => {
     if (!searchValue.trim()) {
@@ -37,65 +105,92 @@ const TrackPetition: React.FC = () => {
 
     setIsSearching(true);
     setError('');
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    let foundPetition = null;
-    
-    if (searchType === 'petitionId') {
-      foundPetition = mockPetitions.find(p => 
-        p.petitionId.toLowerCase() === searchValue.toLowerCase()
-      );
-    } else {
-      foundPetition = mockPetitions.find(p => 
-        p.petitionerPhone.includes(searchValue)
-      );
-      
-      if (foundPetition && foundPetition.isConfidential && !otpValue) {
-        setShowOtpField(true);
-        setIsSearching(false);
-        return;
+    setSearchResult(null);
+    setSearchList(null);
+
+    try {
+      if (searchType === 'petitionId') {
+        const data = await fetchByPetitionId(searchValue.trim());
+        const sr = mapPetitionToSearchResult(data);
+
+        // if petition contains department ID, resolve its name
+        const deptId = sr.petition.departmentId;
+        if (deptId) {
+          try {
+            const dept = await fetchDepartment(deptId);
+            if (dept && dept.departmentName) sr.petition.departmentName = dept.departmentName;
+          } catch (dErr: any) {
+            console.warn('Failed to fetch dept', dErr);
+            // don't block user if dept lookup fails — show petition anyway
+          }
+        }
+
+        if (sr.petition.isConfidential && !otpValue) {
+          setShowOtpField(true);
+          setIsSearching(false);
+          return;
+        }
+        setSearchResult(sr);
+      } else {
+        // mobile search
+        const data = await fetchByPhone(searchValue.trim());
+        const list = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+        if (list.length === 0) {
+          setError('No petitions found for this phone number.');
+        } else if (list.length === 1) {
+          // single -> map and fetch dept if needed
+          const sr = mapPetitionToSearchResult(list[0]);
+          const deptId = sr.petition.departmentId;
+          if (deptId) {
+            try {
+              const dept = await fetchDepartment(deptId);
+              if (dept && dept.departmentName) sr.petition.departmentName = dept.departmentName;
+            } catch (dErr: any) {
+              console.warn('Dept fetch failed', dErr);
+            }
+          }
+          if (sr.petition.isConfidential && !otpValue) {
+            setShowOtpField(true);
+            setIsSearching(false);
+            return;
+          }
+          setSearchResult(sr);
+        } else {
+          // multiple => show list. We'll resolve department when user selects an item.
+          setSearchList(list);
+        }
       }
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Failed to fetch. Check CORS / network / base URL.');
+    } finally {
+      setIsSearching(false);
     }
-    
-    if (!foundPetition) {
-      setError('No petition found with the provided information. Please check and try again.');
-      setSearchResult(null);
-    } else {
-      // Get related tappal if exists
-      const relatedTappal = foundPetition.tappalId 
-        ? mockTappals.find(t => t.tappalId === foundPetition.tappalId)
-        : null;
-      
-      // Get movement history if tappal exists
-      const movements = relatedTappal 
-        ? mockMovements.filter(m => m.tappalId === relatedTappal.tappalId)
-        : [];
-      
-      // Get current officer
-      const currentOfficer = relatedTappal 
-        ? mockUsers.find(u => u.id === relatedTappal.assignedTo)
-        : null;
-      
-      setSearchResult({
-        petition: foundPetition,
-        tappal: relatedTappal,
-        movements,
-        currentOfficer
-      });
-    }
-    
-    setIsSearching(false);
-    setShowOtpField(false);
   };
 
   const handleOtpVerification = () => {
-    if (otpValue === '123456') { // Mock OTP verification
+    if (otpValue === '123456') {
+      setShowOtpField(false);
       handleSearch();
     } else {
       setError('Invalid OTP. Please try again.');
     }
+  };
+
+  const selectFromList = async (item: any) => {
+    // When user selects an item from phone search results, resolve its dept then show full view
+    const sr = mapPetitionToSearchResult(item);
+    const deptId = sr.petition.departmentId;
+    if (deptId) {
+      try {
+        const dept = await fetchDepartment(deptId);
+        if (dept && dept.departmentName) sr.petition.departmentName = dept.departmentName;
+      } catch (dErr: any) {
+        console.warn('Dept fetch failed', dErr);
+      }
+    }
+    setSearchList(null);
+    setSearchResult(sr);
   };
 
   const getStatusIcon = (status: string) => {
@@ -156,7 +251,7 @@ const TrackPetition: React.FC = () => {
       {/* Search Form */}
       <div className="bg-white rounded-xl shadow-lg p-8">
         <div className="space-y-6">
-          {/* Search Type Selection */}
+          {/* Search Type */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">
               Search by:
@@ -196,7 +291,7 @@ const TrackPetition: React.FC = () => {
                 value={searchValue}
                 onChange={(e) => setSearchValue(e.target.value)}
                 className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder={searchType === 'petitionId' ? 'e.g., PET-20250119-001' : 'e.g., 9876543210'}
+                placeholder={searchType === 'petitionId' ? 'e.g., PET-20251101-787' : 'e.g., 9876543210'}
               />
               <button
                 onClick={handleSearch}
@@ -218,7 +313,7 @@ const TrackPetition: React.FC = () => {
             </div>
           </div>
 
-          {/* OTP Field (for mobile search of confidential petitions) */}
+          {/* OTP Field */}
           {showOtpField && (
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
               <div className="flex items-start space-x-3">
@@ -252,7 +347,7 @@ const TrackPetition: React.FC = () => {
             </div>
           )}
 
-          {/* Error Message */}
+          {/* Error */}
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4">
               <div className="flex items-center space-x-3">
@@ -268,8 +363,8 @@ const TrackPetition: React.FC = () => {
               <FileText className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-blue-800">
                 <p className="font-medium mb-1">Demo Instructions:</p>
-                <p>• Try Petition ID: <code className="bg-blue-100 px-1 rounded">PET-2025-001</code></p>
-                <p>• Try Mobile: <code className="bg-blue-100 px-1 rounded">9876543220</code></p>
+                <p>• Try Petition ID: <code className="bg-blue-100 px-1 rounded">PET-20251101-787</code></p>
+                <p>• Try Mobile: <code className="bg-blue-100 px-1 rounded">9876543210</code></p>
                 <p>• For confidential petitions, use OTP: <code className="bg-blue-100 px-1 rounded">123456</code></p>
               </div>
             </div>
@@ -277,10 +372,35 @@ const TrackPetition: React.FC = () => {
         </div>
       </div>
 
+      {/* If phone search returned multiple results, show list to choose */}
+      {searchList && (
+        <div className="bg-white rounded-xl shadow-lg p-6">
+          <h3 className="text-lg font-semibold mb-3">Multiple petitions found — choose one</h3>
+          <div className="space-y-3">
+            {searchList.map((it, idx) => (
+              <div key={it.petitionId || idx} className="flex items-center justify-between p-3 border rounded-lg">
+                <div>
+                  <div className="font-medium">{it.subject}</div>
+                  <div className="text-xs text-gray-500">{it.petitionId} • {formatDate(it.createdAt)}</div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => selectFromList(it)}
+                    className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                  >
+                    Select
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Search Results */}
       {searchResult && (
         <div className="space-y-6">
-          {/* Petition Information */}
+          {/* Petition Info */}
           <div className="bg-white rounded-xl shadow-lg p-8">
             <div className="flex items-start justify-between mb-6">
               <div>
@@ -312,7 +432,7 @@ const TrackPetition: React.FC = () => {
               <p className="text-gray-700">{searchResult.petition.description}</p>
             </div>
 
-            {/* Current Status */}
+            {/* Current Status (only if we have tappal and officer) */}
             {searchResult.tappal && searchResult.currentOfficer && (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                 <div className="flex items-start space-x-3">
@@ -337,13 +457,11 @@ const TrackPetition: React.FC = () => {
           {searchResult.movements && searchResult.movements.length > 0 && (
             <div className="bg-white rounded-xl shadow-lg p-8">
               <h3 className="text-xl font-bold text-gray-900 mb-6">Processing Timeline</h3>
-              
               <div className="relative">
                 <div className="absolute left-4 top-0 bottom-0 w-0.5 bg-gray-300"></div>
-                
                 <div className="space-y-6">
                   {searchResult.movements.map((movement: any, index: number) => (
-                    <div key={movement.id} className="relative flex items-start space-x-6">
+                    <div key={movement.id || index} className="relative flex items-start space-x-6">
                       <div className="relative z-10">
                         <div className={`w-3 h-3 rounded-full border-2 ${
                           movement.status === 'Processed' 
@@ -370,7 +488,6 @@ const TrackPetition: React.FC = () => {
                               {formatDateTime(movement.timestamp)}
                             </span>
                           </div>
-                          
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
                             <div>
                               <p className="text-xs text-gray-500 mb-1">FROM</p>
@@ -383,7 +500,6 @@ const TrackPetition: React.FC = () => {
                               <p className="text-sm text-gray-600">{getRoleDisplayName(movement.toOfficerRole)}</p>
                             </div>
                           </div>
-                          
                           <div className="bg-white rounded-lg p-3 border border-gray-200">
                             <p className="text-xs text-gray-500 mb-1">REMARKS</p>
                             <p className="text-sm text-gray-700">{movement.reason}</p>
@@ -392,7 +508,7 @@ const TrackPetition: React.FC = () => {
                       </div>
                     </div>
                   ))}
-                  
+
                   {/* Current Position */}
                   <div className="relative flex items-start space-x-6">
                     <div className="relative z-10">
@@ -413,6 +529,7 @@ const TrackPetition: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
                 </div>
               </div>
             </div>
