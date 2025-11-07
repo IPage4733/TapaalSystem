@@ -209,7 +209,11 @@ const handleSubmit = async () => {
   try {
     const attachmentUrls = await uploadFilesAndGetUrls(formData.attachments);
 
-    // DEBUG: Check the payload before sending
+    // Resolve department name from departments list (fallback to empty string)
+    const selectedDept = departments.find(d => d.id === formData.department);
+    const departmentName = selectedDept?.departmentName || '';
+
+    // Build payload with departmentName and a couple of sane defaults
     const payload = {
       petitionType: formData.petitionType || 'Other',
       subject: formData.subject,
@@ -218,8 +222,14 @@ const handleSubmit = async () => {
       mobileNumber: formData.mobileNumber,
       aadharNumber: formData.aadharNumber,
       address: formData.address,
-      departmentId: formData.department, // Make sure this has a value
-      attachments: attachmentUrls
+      departmentId: formData.department,      // required by API
+      departmentName: departmentName,         // NEW: send department name separately
+      attachments: attachmentUrls,
+      // Optional/extra fields your backend sample showed — adjust/remove if you prefer
+      status: 'Submitted',                    // server may override, but useful as a default
+      confidential: false,                    // default — change via UI if needed
+      tappalId: '',                           // if you generate tappal IDs client-side add here
+      // do NOT send createdAt — let the server create timestamps
     };
 
     console.log('Final Payload:', payload);
@@ -241,7 +251,7 @@ const handleSubmit = async () => {
       return;
     }
 
-    setGeneratedPetitionId(data.petitionId || data.petitionID || '');
+    setGeneratedPetitionId(data.petitionId || data.petitionID || data.id || '');
     setShowSuccess(true);
   } catch (error) {
     console.error('Submit error', error);
@@ -251,6 +261,7 @@ const handleSubmit = async () => {
   }
 };
 
+      
   const handleReset = () => {
     setFormData({
       petitionType: '',
