@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../common/ToastContainer";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   Plus,
   FileText,
@@ -34,9 +34,10 @@ const OFFICERS_URL =
   "https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer";
 
 const CreateTappal: React.FC = () => {
-  const { user } = useAuth();
+    const { user } = useAuth();
   const { showToast } = useToast();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const preSelectedPetition = searchParams.get("petition");
 
   const [formData, setFormData] = useState({
@@ -460,107 +461,121 @@ const CreateTappal: React.FC = () => {
   };
 
   // helper: update petition record via PUT to API_GET_PETITION(petitionId)
-  const updatePetitionWithTappal = async (
-    petitionId: string,
-    tappalId: string
-  ) => {
+const updatePetitionWithTappal = async (petitionId: string, tappalId: string) => {
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if ((user as any)?.token) headers["Authorization"] = `Bearer ${(user as any).token}`;
+
+    // GET existing to preserve fields we don't have in form
+    const getRes = await fetch(API_GET_PETITION(petitionId), { method: "GET", headers });
+    let existing: any = {};
     try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if ((user as any)?.token)
-        headers["Authorization"] = `Bearer ${(user as any).token}`;
+      const json = await getRes.json();
+      existing = json?.data ?? json ?? {};
+    } catch {
+      existing = {};
+    }
 
-      // fetch current petition to avoid overwriting fields we don't intend to change
-      const getRes = await fetch(API_GET_PETITION(petitionId), {
-        method: "GET",
-        headers,
-      });
-      let existing: any = {};
+    // pick values ensuring required fields exist per your Lambda
+    const fullName = formData.petitionerName || existing.fullName || existing.petitionerName || "";
+    const subject = formData.subject || existing.subject || "";
+    const petitionType = formData.petitionType || existing.petitionType || "General";
+    const mobileNumber = formData.phoneNumber || existing.mobileNumber || existing.petitionerPhone || "";
+    const status = "Tappal Generated";
+    // Lambda expects dueDate (ISO) and will validate presence
+    const dueDate = formData.expiryDate
+      ? new Date(formData.expiryDate).toISOString()
+      : existing.dueDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // fallback if missing
+
+    const aadharNumber = formData.aadharNumber || existing.aadharNumber || existing.adharNumber || "";
+    const address = existing.address || "";
+    const departmentId = formData.department || existing.departmentId || existing.department || "";
+    const departmentName =
+      departments.find((d) => d.id === departmentId)?.name ||
+      existing.departmentName ||
+      "";
+
+    // assigned officer info
+    const assignedOfficer = availableOfficers.find((o) => o.id === formData.assignedTo);
+    const assignedTo = formData.assignedTo || existing.assignedTo || "";
+    const assignedToName = assignedOfficer?.name || existing.assignedToName || "";
+
+    const item = {
+      petitionId, // path key must match
+      petitionType,
+      subject,
+      description: formData.description || existing.description || "",
+      fullName,
+      mobileNumber,
+      aadharNumber,
+      address,
+      departmentId,
+      departmentName,
+      attachments: formData.attachments.length ? formData.attachments : existing.attachments || [],
+      status,
+      createdAt: existing.createdAt || new Date().toISOString(),
+      dueDate,
+      confidential: !!formData.isConfidential,
+      // IMPORTANT: your Lambda writes tappleId field — use that exact name
+      tappleId: tappalId,
+      // also include these so tappal and petition remain in sync
+      assignedTo,
+      assignedToName,
+    };
+
+    // Send full PUT (Lambda expects full update)
+    const putRes = await fetch(API_GET_PETITION(petitionId), {
+      method: "PUT",
+      headers,
+      body: JSON.stringify(item),
+    });
+
+    if (!putRes.ok) {
+      let errText = `PUT returned ${putRes.status}`;
       try {
-        const json = await getRes.json();
-        existing = json?.data ?? json ?? {};
-      } catch {
-        existing = {};
-      }
+        const errBody = await putRes.json();
+        errText = errBody?.message || JSON.stringify(errBody);
+      } catch {}
+      throw new Error(errText);
+    }
 
-      // build updated payload - follow example structure you provided
-      const payload: any = {
-        // prefer existing values, fall back to formData
-        fullName:
-          formData.petitionerName ||
-          existing.fullName ||
-          existing.petitionerName ||
-          "",
-        subject: formData.subject || existing.subject || "",
-        petitionType: formData.petitionType || existing.petitionType || "",
-        description: formData.description || existing.description || "",
-        mobileNumber:
-          formData.phoneNumber ||
-          existing.mobileNumber ||
-          existing.petitionerPhone ||
-          "",
-        aadharNumber:
-          formData.aadharNumber ||
-          existing.aadharNumber ||
-          existing.adharNumber ||
-          "",
-        address: existing.address ?? "",
-        departmentId:
-          formData.department ||
-          existing.departmentId ||
-          existing.department ||
-          "",
-        departmentName:
-          departments.find(
-            (d) => d.id === (formData.department || existing.departmentId || "")
-          )?.name ||
-          existing.departmentName ||
-          "",
-        attachments: formData.attachments.length
-          ? formData.attachments
-          : existing.attachments || [],
-        // set status to Tappal Generated as requested
-        status: "Tappal Generated",
-        dueDate: formData.expiryDate
-          ? new Date(formData.expiryDate).toISOString()
-          : existing.dueDate || null,
-        confidential: !!formData.isConfidential,
-        tappleId: tappalId,
-        // preserve createdAt if present
-        createdAt: existing.createdAt || new Date().toISOString(),
-      };
+    // Verify the update by fetching again
+    const verifyRes = await fetch(API_GET_PETITION(petitionId), { method: "GET", headers });
+    let verifyJson: any = {};
+    try {
+      const vj = await verifyRes.json();
+      verifyJson = vj?.data ?? vj ?? {};
+    } catch {}
+    const written = verifyJson?.tappleId ?? verifyJson?.tappalId ?? verifyJson?.tappal_id ?? null;
 
-      // PUT request
-      const putRes = await fetch(API_GET_PETITION(petitionId), {
-        method: "PUT",
-        headers,
-        body: JSON.stringify(payload),
+    if (!written || written !== tappalId) {
+      console.warn("Verification mismatch:", written, "expected:", tappalId, "verifyJson:", verifyJson);
+      showToast?.({
+        type: "warning",
+        title: "Petition updated but tappal id mismatch",
+        message: written ? `Server stored ${written} but expected ${tappalId}` : "Server did not return tappal id after update",
+        duration: 8000,
       });
-
-      if (!putRes.ok) {
-        let errText = `PUT returned ${putRes.status}`;
-        try {
-          const errBody = await putRes.json();
-          errText = errBody?.message || JSON.stringify(errBody);
-        } catch {}
-        throw new Error(errText);
-      }
-
+    } else {
       showToast?.({
         type: "success",
         title: "Petition updated",
-        message: `Petition ${petitionId} updated with tappal ${tappalId} and marked Tappal Generated.`,
-      });
-    } catch (err: any) {
-      console.error("Failed to update petition with tappal:", err);
-      showToast?.({
-        type: "error",
-        title: "Failed to update petition",
-        message: err?.message || "Petition update failed",
+        message: `Petition ${petitionId} updated with tappal ${tappalId}.`,
       });
     }
-  };
+  } catch (err: any) {
+    console.error("Failed to update petition with tappal:", err);
+    showToast?.({
+      type: "error",
+      title: "Failed to update petition",
+      message: err?.message || "Petition update failed",
+    });
+  }
+};
+
+
 
   // POST create tappal (same as previous implementation) + update petition if linked
   const handleSubmit = async (e: React.FormEvent) => {
@@ -583,6 +598,18 @@ const CreateTappal: React.FC = () => {
       return;
     }
 
+    // Resolve assignedToName from availableOfficers (fallback empty string)
+    const assignedOfficer = availableOfficers.find((o) => o.id === formData.assignedTo);
+    const assignedToName = assignedOfficer?.name || "";
+
+    // Resolve createdBy from user context (try several fallbacks)
+    const createdBy =
+      (user as any)?.fullName ||
+      (user as any)?.name ||
+      (user as any)?.email ||
+      (user as any)?.id ||
+      "";
+
     const payload = {
       petitionId: formData.petitionId || undefined,
       petitionType: formData.petitionType || "General",
@@ -595,6 +622,9 @@ const CreateTappal: React.FC = () => {
         mockDepartments.find((d) => d.id === formData.department)?.name ||
         formData.department,
       assignToOfficer: formData.assignedTo,
+      assignedTo: formData.assignedTo, // include assignedTo explicitly
+      assignedToName, // include human name for backend
+      createdBy, // who created this tappal
       subject: formData.subject,
       description: formData.description,
       priority: formData.priority,
@@ -632,28 +662,41 @@ const CreateTappal: React.FC = () => {
         responseBody = null;
       }
 
+      // Helpful debug during development
+      console.debug("Create tappal response:", responseBody);
+
+      // Prefer server-provided tappal id (check common fields)
       const serverTappalId =
         responseBody?.tappalId ??
-        responseBody?.tappalID ??
+        responseBody?.tappleId ??
         responseBody?.tappal_id ??
+        responseBody?.tappalID ??
         responseBody?.id ??
+        responseBody?.tappal?.tappalId ??
+        responseBody?.tappal?.tappleId ??
         null;
 
-      const tappalId =
-        serverTappalId ||
-        `TAP-2025-${String(Math.floor(Math.random() * 900) + 100).padStart(
-          3,
-          "0"
-        )}`;
+      if (!serverTappalId) {
+        // Server didn't return the created tappal id — abort linking & navigation
+        showToast?.({
+          type: "error",
+          title: "Missing tappal id",
+          message:
+            "Server did not return the created tappal id. Petition was not linked. Check server response.",
+        });
+        return;
+      }
+
+      const tappalId = serverTappalId;
 
       showToast({
         type: "success",
         title: "Tappal Created Successfully!",
         message: `Tappal ${tappalId} created and assigned.`,
-        duration: 8000,
+        duration: 5000,
       });
 
-      // If a petition was linked, update the petition record to include tappal details
+      // Update the petition if linked (this will call your PUT and include assignedTo info)
       if (formData.petitionId) {
         await updatePetitionWithTappal(formData.petitionId, tappalId);
       }
@@ -675,6 +718,13 @@ const CreateTappal: React.FC = () => {
         priority: "Medium",
         attachments: [],
       });
+
+      // Navigate to tappal detail page — use the server-authoritative id
+      try {
+        navigate(`/tappal/${encodeURIComponent(tappalId)}`);
+      } catch (navErr) {
+        console.warn("Navigation to tappal detail failed:", navErr);
+      }
     } catch (err: any) {
       console.error("Create tappal failed:", err);
       showToast?.({
@@ -684,6 +734,7 @@ const CreateTappal: React.FC = () => {
       });
     }
   };
+
 
   const handleClear = () => {
     setFormData({
