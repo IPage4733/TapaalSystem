@@ -70,17 +70,47 @@ const TappalDetail: React.FC = () => {
     toOfficerPhone: m.toOfficerPhone || m.toPhone || '',
     reason: m.reason || m.remark || m.description || '',
     status: m.status || 'Received',
-    timestamp: m.createdAt || m.timestamp || new Date().toISOString()
+    // normalize timestamp field name variants to ISO string
+    timestamp: m.createdAt || m.timestamp || m.createdAtTime || new Date().toISOString()
   });
+
+  // human-friendly duration formatter
+  const formatDuration = (ms: number) => {
+    if (!ms || ms <= 0) return '0m';
+    const secs = Math.floor(ms / 1000);
+    const mins = Math.floor(secs / 60) % 60;
+    const hours = Math.floor(secs / 3600) % 24;
+    const days = Math.floor(secs / 86400);
+
+    const parts: string[] = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (mins) parts.push(`${mins}m`);
+    if (parts.length === 0) return `${Math.floor(secs)}s`;
+    return parts.join(' ');
+  };
 
   const buildMovementsForTappal = (id: string, movementsRaw: any[]) => {
     if (!id || !Array.isArray(movementsRaw)) return [];
-    const filtered = movementsRaw.filter(m =>
-      (m.tappalId || m.tappleId || m.tappalId === undefined ? '' : m.tappalId).toString() === id.toString()
-      || (m.tappalId || m.tappleId || '').toString() === id.toString()
-    );
+    const filtered = movementsRaw.filter(m => {
+      // robust checks across different field names
+      const mid = m.tappalId || m.tappleId || '';
+      return String(mid).toString() === String(id).toString();
+    });
     const mapped = filtered.map((m, i) => normalizeMovement(m, i));
     mapped.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    // compute duration each movement represents until the next movement timestamp
+    for (let i = 0; i < mapped.length; i++) {
+      const cur = mapped[i];
+      const next = mapped[i + 1];
+      const curTs = isNaN(new Date(cur.timestamp).getTime()) ? Date.now() : new Date(cur.timestamp).getTime();
+      const nextTs = next && !isNaN(new Date(next.timestamp).getTime()) ? new Date(next.timestamp).getTime() : Date.now();
+      const durationMs = Math.max(0, nextTs - curTs);
+      cur.durationMs = durationMs;
+      cur.durationHuman = formatDuration(durationMs);
+    }
+
     return mapped;
   };
 
@@ -133,38 +163,35 @@ const TappalDetail: React.FC = () => {
   };
 
   // --- helper to update tappal via PUT (returns parsed response if available) ---
-// --- helper to update tappal via PUT (returns parsed response if available) ---
-const updateTappalOnServer = async (fields: Record<string, any>) => {
-  if (!tappal) throw new Error('No tappal loaded to update');
+  const updateTappalOnServer = async (fields: Record<string, any>) => {
+    if (!tappal) throw new Error('No tappal loaded to update');
 
-  const tappalIdentifier = tappal.tappalId || normalizeTappalId(tappal) || tappalId;
-  if (!tappalIdentifier) throw new Error('Unable to determine tappal identifier for update');
+    const tappalIdentifier = tappal.tappalId || normalizeTappalId(tappal) || tappalId;
+    if (!tappalIdentifier) throw new Error('Unable to determine tappal identifier for update');
 
-  // Build payload: include only what's necessary, but ensure tappalId exists.
-  // Sending a smaller payload reduces chance of overwriting server-side fields unexpectedly.
-  const payload = {
-    tappalId: tappalIdentifier,
-    ...fields
+    // Build payload: include only what's necessary, but ensure tappalId exists.
+    const payload = {
+      tappalId: tappalIdentifier,
+      ...fields
+    };
+
+    const putUrl = `${TAPPAL_API}/${encodeURIComponent(String(tappalIdentifier))}`;
+
+    const res = await fetch(putUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText || 'PUT failed');
+      throw new Error(`Tappal update failed: ${res.status} ${text}`);
+    }
+
+    // Return parsed JSON if backend returns updated object
+    const json = await res.json().catch(() => ({}));
+    return json;
   };
-
-  const putUrl = `${TAPPAL_API}/${encodeURIComponent(String(tappalIdentifier))}`;
-
-  const res = await fetch(putUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText || 'PUT failed');
-    throw new Error(`Tappal update failed: ${res.status} ${text}`);
-  }
-
-  // Return parsed JSON if backend returns updated object
-  const json = await res.json().catch(() => ({}));
-  return json;
-};
-
 
   // --- Load live data (including per-tappal movements) ---------------------
   useEffect(() => {
@@ -246,124 +273,135 @@ const updateTappalOnServer = async (fields: Record<string, any>) => {
   const canChangeStatus = canForward;
 
   // action handlers
-const handleForward = async () => {
-  if (!forwardForm.toOfficerId || !forwardForm.reason.trim()) {
-    showToast({ type: 'error', title: 'Validation Error', message: 'Please select an officer and provide a reason for forwarding.' });
-    return;
-  }
-
-  const toOfficer = officers.find(o => o.id === forwardForm.toOfficerId || o.employeeId === forwardForm.toOfficerId);
-  if (!toOfficer) {
-    showToast({ type: 'error', title: 'Forward failed', message: 'Selected officer not found.' });
-    return;
-  }
-
-  const fromActor = assignedOfficer || user || {};
-  const fromId = fromActor.employeeId || fromActor.id || user?.employeeId || user?.id || 'UNKNOWN';
-  const fromName = fromActor.fullName || fromActor.name || user?.fullName || user?.name || 'Unknown';
-
-  const movementPayload = {
-    fromOfficerId: fromId,
-    toOfficerId: toOfficer.employeeId || toOfficer.id || 'UNKNOWN',
-    reason: forwardForm.reason,
-    fromOfficerName: fromName,
-    toOfficerName: toOfficer.fullName || toOfficer.name || 'Unknown',
-    fromOfficerRole: fromActor.role || '',
-    toOfficerRole: toOfficer.role || toOfficer.position || '',
-    fromDepartment: fromActor.department || '',
-    toDepartment: toOfficer.department || '',
-    fromOfficerPhone: fromActor.phone || fromActor.phoneNumber || '',
-    toOfficerPhone: toOfficer.phone || toOfficer.phoneNumber || '',
-    status: 'Forwarded',
-    timestamp: new Date().toISOString()
-  };
-
-  setForwardLoading(true);
-  try {
-    const tappalIdentifier = tappal.tappalId || normalizeTappalId(tappal) || tappalId;
-    const postUrl = `${MOVEMENT_API_POST_BASE}/${encodeURIComponent(String(tappalIdentifier))}/forward`;
-
-    // 1) Create movement record
-    const res = await fetch(postUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(movementPayload)
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => res.statusText || 'POST failed');
-      showToast({ type: 'error', title: 'Forward failed', message: `Server returned ${res.status}: ${errorText}` });
-      setForwardLoading(false);
+  const handleForward = async () => {
+    if (!forwardForm.toOfficerId || !forwardForm.reason.trim()) {
+      showToast({ type: 'error', title: 'Validation Error', message: 'Please select an officer and provide a reason for forwarding.' });
       return;
     }
 
-    const created = await res.json();
-    const createdMovementRaw = Array.isArray(created) ? created[0] : (created?.data || created || {});
-    const newMovement = normalizeMovement(createdMovementRaw, movements.length + 1);
-
-    // Append movement in UI
-    setMovements(prev => {
-      const next = [...prev, newMovement];
-      next.sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-      return next;
-    });
-
-    // 2) Persist assignment using canonical backend fields (assignedTo / assignedToName)
-    try {
-      const putResult = await updateTappalOnServer({
-        assignedTo: toOfficer.employeeId || toOfficer.id,
-        assignedToName: toOfficer.fullName || toOfficer.name
-      });
-
-      // If PUT returns updated object, use it to update UI
-      if (putResult && typeof putResult === 'object' && Object.keys(putResult).length > 0) {
-        const latestTappal = Array.isArray(putResult) ? putResult[0] : (putResult?.data || putResult || {});
-        setTappal(prev => ({ ...(prev || {}), ...latestTappal }));
-        const resolved = resolveAssignedOfficer(latestTappal, officers);
-        if (resolved) setAssignedOfficer(resolved);
-        else setAssignedOfficer(toOfficer);
-      } else {
-        // fallback: optimistic local update and best-effort re-fetch
-        setTappal(prev => ({ ...(prev || {}), assignedTo: toOfficer.employeeId || toOfficer.id, assignedToName: toOfficer.fullName || toOfficer.name }));
-        setAssignedOfficer(toOfficer);
-
-        // Attempt to GET authoritative tappal
-        try {
-          const getUrl = `${TAPPAL_API}/${encodeURIComponent(String(tappalIdentifier))}`;
-          const getRes = await fetch(getUrl);
-          if (getRes.ok) {
-            const latest = await getRes.json();
-            const latestTappal = Array.isArray(latest) ? latest[0] : (latest?.data || latest || {});
-            setTappal(prev => ({ ...(prev || {}), ...latestTappal }));
-            const resolved = resolveAssignedOfficer(latestTappal, officers);
-            if (resolved) setAssignedOfficer(resolved);
-          }
-        } catch (e) {
-          // ignore GET error — UI already optimistically updated
-          console.warn('GET after PUT failed', e);
-        }
-      }
-
-      showToast({ type: 'success', title: 'Tappal Forwarded', message: `${tappal?.tappalId} forwarded to ${toOfficer.fullName || toOfficer.name}` });
-    } catch (err: any) {
-      console.error('PUT assign failed', err);
-      // Keep optimistic update so UI matches user action
-      setTappal(prev => ({ ...(prev || {}), assignedTo: toOfficer.employeeId || toOfficer.id, assignedToName: toOfficer.fullName || toOfficer.name }));
-      setAssignedOfficer(toOfficer);
-      showToast({ type: 'warning', title: 'Partial Success', message: 'Movement saved but persisting assignment failed. UI updated optimistically.' });
+    const toOfficer = officers.find(o => o.id === forwardForm.toOfficerId || o.employeeId === forwardForm.toOfficerId);
+    if (!toOfficer) {
+      showToast({ type: 'error', title: 'Forward failed', message: 'Selected officer not found.' });
+      return;
     }
 
-    // reset form & close
-    setForwardForm({ toOfficerId: '', reason: '' });
-    setShowForwardModal(false);
-  } catch (err: any) {
-    console.error('Forward error', err);
-    showToast({ type: 'error', title: 'Forward failed', message: err.message || 'Network error while forwarding' });
-  } finally {
-    setForwardLoading(false);
-  }
-};
+    const fromActor = assignedOfficer || user || {};
+    const fromId = fromActor.employeeId || fromActor.id || user?.employeeId || user?.id || 'UNKNOWN';
+    const fromName = fromActor.fullName || fromActor.name || user?.fullName || user?.name || 'Unknown';
 
+    const movementPayload = {
+      fromOfficerId: fromId,
+      toOfficerId: toOfficer.employeeId || toOfficer.id || 'UNKNOWN',
+      reason: forwardForm.reason,
+      fromOfficerName: fromName,
+      toOfficerName: toOfficer.fullName || toOfficer.name || 'Unknown',
+      fromOfficerRole: fromActor.role || '',
+      toOfficerRole: toOfficer.role || toOfficer.position || '',
+      fromDepartment: fromActor.department || '',
+      toDepartment: toOfficer.department || '',
+      fromOfficerPhone: fromActor.phone || fromActor.phoneNumber || '',
+      toOfficerPhone: toOfficer.phone || toOfficer.phoneNumber || '',
+      status: 'Forwarded',
+      timestamp: new Date().toISOString()
+    };
+
+    setForwardLoading(true);
+    try {
+      const tappalIdentifier = tappal.tappalId || normalizeTappalId(tappal) || tappalId;
+      const postUrl = `${MOVEMENT_API_POST_BASE}/${encodeURIComponent(String(tappalIdentifier))}/forward`;
+
+      // 1) Create movement record
+      const res = await fetch(postUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(movementPayload)
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => res.statusText || 'POST failed');
+        showToast({ type: 'error', title: 'Forward failed', message: `Server returned ${res.status}: ${errorText}` });
+        setForwardLoading(false);
+        return;
+      }
+
+      const created = await res.json();
+      const createdMovementRaw = Array.isArray(created) ? created[0] : (created?.data || created || {});
+      const newMovement = normalizeMovement(createdMovementRaw, movements.length + 1);
+
+      // Append movement in UI
+      setMovements(prev => {
+        const next = [...prev, newMovement];
+        next.sort((a,b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+        // recompute durations after adding
+        for (let i = 0; i < next.length; i++) {
+          const cur = next[i];
+          const nextMv = next[i + 1];
+          const curTs = isNaN(new Date(cur.timestamp).getTime()) ? Date.now() : new Date(cur.timestamp).getTime();
+          const nextTs = nextMv && !isNaN(new Date(nextMv.timestamp).getTime()) ? new Date(nextMv.timestamp).getTime() : Date.now();
+          const durationMs = Math.max(0, nextTs - curTs);
+          cur.durationMs = durationMs;
+          cur.durationHuman = formatDuration(durationMs);
+        }
+
+        return next;
+      });
+
+      // 2) Persist assignment using canonical backend fields (assignedTo / assignedToName)
+      try {
+        const putResult = await updateTappalOnServer({
+          assignedTo: toOfficer.employeeId || toOfficer.id,
+          assignedToName: toOfficer.fullName || toOfficer.name
+        });
+
+        // If PUT returns updated object, use it to update UI
+        if (putResult && typeof putResult === 'object' && Object.keys(putResult).length > 0) {
+          const latestTappal = Array.isArray(putResult) ? putResult[0] : (putResult?.data || putResult || {});
+          setTappal(prev => ({ ...(prev || {}), ...latestTappal }));
+          const resolved = resolveAssignedOfficer(latestTappal, officers);
+          if (resolved) setAssignedOfficer(resolved);
+          else setAssignedOfficer(toOfficer);
+        } else {
+          // fallback: optimistic local update and best-effort re-fetch
+          setTappal(prev => ({ ...(prev || {}), assignedTo: toOfficer.employeeId || toOfficer.id, assignedToName: toOfficer.fullName || toOfficer.name }));
+          setAssignedOfficer(toOfficer);
+
+          // Attempt to GET authoritative tappal
+          try {
+            const getUrl = `${TAPPAL_API}/${encodeURIComponent(String(tappalIdentifier))}`;
+            const getRes = await fetch(getUrl);
+            if (getRes.ok) {
+              const latest = await getRes.json();
+              const latestTappal = Array.isArray(latest) ? latest[0] : (latest?.data || latest || {});
+              setTappal(prev => ({ ...(prev || {}), ...latestTappal }));
+              const resolved = resolveAssignedOfficer(latestTappal, officers);
+              if (resolved) setAssignedOfficer(resolved);
+            }
+          } catch (e) {
+            // ignore GET error — UI already optimistically updated
+            console.warn('GET after PUT failed', e);
+          }
+        }
+
+        showToast({ type: 'success', title: 'Tappal Forwarded', message: `${tappal?.tappalId} forwarded to ${toOfficer.fullName || toOfficer.name}` });
+      } catch (err: any) {
+        console.error('PUT assign failed', err);
+        // Keep optimistic update so UI matches user action
+        setTappal(prev => ({ ...(prev || {}), assignedTo: toOfficer.employeeId || toOfficer.id, assignedToName: toOfficer.fullName || toOfficer.name }));
+        setAssignedOfficer(toOfficer);
+        showToast({ type: 'warning', title: 'Partial Success', message: 'Movement saved but persisting assignment failed. UI updated optimistically.' });
+      }
+
+      // reset form & close
+      setForwardForm({ toOfficerId: '', reason: '' });
+      setShowForwardModal(false);
+    } catch (err: any) {
+      console.error('Forward error', err);
+      showToast({ type: 'error', title: 'Forward failed', message: err.message || 'Network error while forwarding' });
+    } finally {
+      setForwardLoading(false);
+    }
+  };
 
   const handleAddComment = async () => {
     if (!commentForm.comment.trim()) {
@@ -631,7 +669,17 @@ const handleForward = async () => {
                               </div>
                             </div>
 
-                            <div className="bg-white rounded-lg p-3 border border-gray-200"><p className="text-xs text-gray-500 mb-1">FORWARDING REASON</p><p className="text-sm text-gray-700">{movement.reason || '—'}</p></div>
+                            <div className="bg-white rounded-lg p-3 border border-gray-200">
+                              <p className="text-xs text-gray-500 mb-1">FORWARDING REASON</p>
+                              <p className="text-sm text-gray-700">{movement.reason || '—'}</p>
+
+                              {/* duration held until next forward */}
+                              {movement.durationHuman && (
+                                <p className="text-xs text-gray-500 mt-2">
+                                  Time with {movement.toOfficerName || 'officer'}: <span className="font-medium text-gray-700" title={`${movement.durationMs || 0} ms`}>{movement.durationHuman}</span>
+                                </p>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>

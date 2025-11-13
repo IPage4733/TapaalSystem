@@ -35,6 +35,22 @@ const TrackPetition: React.FC = () => {
     return petition?.tappleId || petition?.tappalId || petition?.tappleID || petition?.tappalID || '';
   };
 
+  // human-friendly duration formatter
+  const formatDuration = (ms: number) => {
+    if (!ms || ms <= 0) return '0m';
+    const secs = Math.floor(ms / 1000);
+    const mins = Math.floor(secs / 60) % 60;
+    const hours = Math.floor(secs / 3600) % 24;
+    const days = Math.floor(secs / 86400);
+
+    const parts: string[] = [];
+    if (days) parts.push(`${days}d`);
+    if (hours) parts.push(`${hours}h`);
+    if (mins) parts.push(`${mins}m`);
+    if (parts.length === 0) return `${Math.floor(secs)}s`;
+    return parts.join(' ');
+  };
+
   // Fetch helpers
   const fetchPetitionById = async (petitionId: string) => {
     const res = await fetch(`${PETITION_API}/${encodeURIComponent(petitionId)}`);
@@ -99,16 +115,28 @@ const TrackPetition: React.FC = () => {
     const filtered = movementsRaw.filter(m => (m.tappalId || m.tappleId || '').toString() === tappalId.toString());
     const mapped = filtered.map((m: any, idx: number) => ({
       id: m.forwardId || `mv-${idx}`,
-      tappalId: m.tappalId,
-      fromOfficerName: m.fromOfficerName || m.fromOfficer || 'Unknown',
-      toOfficerName: m.toOfficerName || m.toOfficer || 'Unknown',
+      tappalId: m.tappalId || m.tappleId || '',
+      fromOfficerName: m.fromOfficerName || m.fromOfficer || m.fromName || 'Unknown',
+      toOfficerName: m.toOfficerName || m.toOfficer || m.toName || 'Unknown',
       fromOfficerRole: m.fromOfficerRole || m.fromRole || 'clerk',
-      toOfficerRole: m.toOfficerRole || m.toOfficerRole || 'clerk',
+      toOfficerRole: m.toOfficerRole || m.toRole || 'clerk',
       reason: m.reason || m.remark || m.description || '',
       status: m.status || 'Received',
       timestamp: m.createdAt || m.timestamp || new Date().toISOString(),
     }));
     mapped.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    // compute duration each movement represents until the next movement timestamp
+    for (let i = 0; i < mapped.length; i++) {
+      const cur = mapped[i];
+      const next = mapped[i + 1];
+      const curTs = isNaN(new Date(cur.timestamp).getTime()) ? Date.now() : new Date(cur.timestamp).getTime();
+      const nextTs = next && !isNaN(new Date(next.timestamp).getTime()) ? new Date(next.timestamp).getTime() : Date.now();
+      const durationMs = Math.max(0, nextTs - curTs);
+      cur.durationMs = durationMs;
+      cur.durationHuman = formatDuration(durationMs);
+    }
+
     return mapped;
   };
 
@@ -470,6 +498,13 @@ const TrackPetition: React.FC = () => {
                           <div className="bg-white rounded-lg p-3 border border-gray-200">
                             <p className="text-xs text-gray-500 mb-1">REMARKS</p>
                             <p className="text-sm text-gray-700">{movement.reason || '—'}</p>
+
+                            {/* duration held until next forward */}
+                            {movement.durationHuman && (
+                              <p className="text-xs text-gray-500 mt-2">
+                                Time with {movement.toOfficerName || 'officer'}: <span className="font-medium text-gray-700" title={`${movement.durationMs || 0} ms`}>{movement.durationHuman}</span>
+                              </p>
+                            )}
                           </div>
                         </div>
                       </div>
