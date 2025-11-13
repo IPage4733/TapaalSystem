@@ -18,7 +18,8 @@ export type UserRole =
   | 'naib_tahsildar'
   | 'ri'
   | 'vro'
-  | 'clerk';
+  | 'clerk'
+  | (string & {});
 
 export interface AuthUser {
   id: string;

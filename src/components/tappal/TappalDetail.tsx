@@ -1,5 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { getCommentsByTappalId, addComment as addCommentApi, deleteComment as deleteCommentApi } from '../../services/commentService';
+import { updateTapalStatus } from '../../services/tapalApiService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../common/ToastContainer';
 import { 
@@ -28,6 +30,7 @@ import { mockTappals } from '../../data/mockTappals';
 import { mockUsers } from '../../data/mockUsers';
 import { mockMovements } from '../../data/mockMovements';
 import { formatDate, formatDateTime, getDaysOverdue, isOverdue, getStatusColor, getPriorityColor } from '../../utils/dateUtils';
+import { Tappal } from '../../types/Tappal';
 
 const TappalDetail: React.FC = () => {
   const { tappalId } = useParams<{ tappalId: string }>();
@@ -44,7 +47,13 @@ const TappalDetail: React.FC = () => {
   const [commentForm, setCommentForm] = useState({
     comment: ''
   });
-  const [statusForm, setStatusForm] = useState({
+  const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [apiComments, setApiComments] = useState<any[]>([]);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
+  const [statusForm, setStatusForm] = useState<{
+    newStatus: Tappal['status'] | '';
+    reason: string;
+  }>({
     newStatus: '',
     reason: ''
   });
@@ -58,6 +67,31 @@ const TappalDetail: React.FC = () => {
   const assignedOfficer = useMemo(() => {
     if (!tappal) return null;
     return mockUsers.find(u => u.id === tappal.assignedTo);
+  }, [tappal]);
+
+  // Fetch comments when tappal changes
+  useEffect(() => {
+    const fetchComments = async () => {
+      if (!tappal) return;
+      
+      setIsLoadingComments(true);
+      try {
+        const comments = await getCommentsByTappalId(tappal.tappalId);
+        setApiComments(comments);
+      } catch (error) {
+        console.error('Failed to fetch comments:', error);
+        showToast({
+          type: 'error',
+          title: 'Error',
+          message: 'Failed to load comments. Using local data as fallback.'
+        });
+        setApiComments(tappal.comments || []);
+      } finally {
+        setIsLoadingComments(false);
+      }
+    };
+
+    fetchComments();
   }, [tappal]);
 
   // Get movement history
@@ -224,7 +258,36 @@ const TappalDetail: React.FC = () => {
     setForwardForm({ toOfficerId: '', reason: '' });
   };
 
-  const handleAddComment = () => {
+  const handleDeleteComment = async (commentId: string) => {
+    if (!window.confirm('Are you sure you want to delete this comment? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      setDeletingCommentId(commentId);
+      await deleteCommentApi(commentId);
+      
+      // Update local state to remove the deleted comment
+      setApiComments(prev => prev.filter(comment => comment.id !== commentId));
+      
+      showToast({
+        type: 'success',
+        title: 'Comment Deleted',
+        message: 'The comment has been deleted successfully.'
+      });
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      showToast({
+        type: 'error',
+        title: 'Error',
+        message: 'Failed to delete comment. Please try again.'
+      });
+    } finally {
+      setDeletingCommentId(null);
+    }
+  };
+
+  const handleAddComment = async () => {
     if (!commentForm.comment.trim()) {
       showToast({
         type: 'error',
@@ -234,23 +297,58 @@ const TappalDetail: React.FC = () => {
       return;
     }
 
-    // In real implementation, this would:
-    // 1. Create new comment record
-    // 2. Send notification to assigned officer
-    // 3. Update tappal's comments array
+    try {
+      // Check if user is authenticated
+      if (!user) {
+        showToast({
+          type: 'error',
+          title: 'Authentication Required',
+          message: 'You need to be logged in to add comments.'
+        });
+        return;
+      }
 
-    showToast({
-      type: 'success',
-      title: 'Comment Added Successfully',
-      message: `Your comment has been added to ${tappal.tappalId} and the assigned officer will be notified.`,
-      duration: 5000
-    });
+      const newComment = {
+        tappalId: tappal.tappalId,
+        userId: user.id,
+        userName: user.name,
+        comment: commentForm.comment.trim(),
+      };
 
-    setShowCommentModal(false);
-    setCommentForm({ comment: '' });
+      const addedComment = await addCommentApi(newComment);
+      
+      // Update local state with the new comment
+      setApiComments(prev => [addedComment, ...prev]);
+      
+      showToast({
+        type: 'success',
+        title: 'Comment Added Successfully',
+        message: `Your comment has been added to ${tappal.tappalId}`,
+        duration: 5000
+      });
+
+      setShowCommentModal(false);
+      setCommentForm({ comment: '' });
+    } catch (error: any) {
+      console.error('Error adding comment:', error);
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to add comment. Please try again.';
+      
+      showToast({
+        type: 'error',
+        title: 'Error',
+        message: errorMessage,
+        duration: 5000
+      });
+      
+      // If unauthorized, redirect to login or refresh token
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        // You might want to redirect to login or refresh the token here
+        // For now, we'll just show the error message
+      }
+    }
   };
 
-  const handleStatusChange = () => {
+  const handleStatusChange = async () => {
     if (!statusForm.newStatus || !statusForm.reason.trim()) {
       showToast({
         type: 'error',
@@ -260,21 +358,38 @@ const TappalDetail: React.FC = () => {
       return;
     }
 
-    // In real implementation, this would:
-    // 1. Update tappal status
-    // 2. Create status change log
-    // 3. Send notifications to relevant officers
-    // 4. Update completion date if status is 'Completed'
+    try {
+      // Call the API to update the status
+      await updateTapalStatus(tappal.tappalId, statusForm.newStatus, statusForm.reason);
+      
+      // Update the local state to reflect the change
+      tappal.status = statusForm.newStatus as Tappal['status'];
+      
+      // If status is completed, update the completion date
+      if (statusForm.newStatus === 'Completed') {
+        tappal.completedAt = new Date().toISOString();
+      }
 
-    showToast({
-      type: 'success',
-      title: 'Status Updated Successfully',
-      message: `${tappal.tappalId} status has been changed to ${statusForm.newStatus}. All relevant officers have been notified.`,
-      duration: 6000
-    });
+      showToast({
+        type: 'success',
+        title: 'Status Updated Successfully',
+        message: `${tappal.tappalId} status has been changed to ${statusForm.newStatus}.`,
+        duration: 6000
+      });
 
-    setShowStatusModal(false);
-    setStatusForm({ newStatus: '', reason: '' });
+      setShowStatusModal(false);
+      setStatusForm({ newStatus: '', reason: '' });
+      
+      // Refresh the page to show updated status
+      window.location.reload();
+    } catch (error) {
+      console.error('Error updating status:', error);
+      showToast({
+        type: 'error',
+        title: 'Error',
+        message: 'Failed to update status. Please try again.'
+      });
+    }
   };
   const daysOverdue = getDaysOverdue(tappal.expiryDate);
   const overdueStatus = isOverdue(tappal.expiryDate, tappal.status);
@@ -523,6 +638,43 @@ const TappalDetail: React.FC = () => {
                               </div>
                             </div>
                             
+                            {/* Comments Section */}
+                            <div className="bg-white rounded-lg shadow p-6">
+                              <div className="flex justify-between items-center mb-4">
+                                <h3 className="text-lg font-medium text-gray-900">Comments</h3>
+                                <button
+                                  onClick={() => setShowCommentModal(true)}
+                                  className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                                  disabled={isLoadingComments}
+                                >
+                                  <Plus className="h-3.5 w-3.5 mr-1" />
+                                  {isLoadingComments ? 'Loading...' : 'Add Comment'}
+                                </button>
+                              </div>
+                              
+                              {isLoadingComments ? (
+                                <div className="flex justify-center py-4">
+                                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                                </div>
+                              ) : apiComments.length > 0 ? (
+                                <div className="space-y-4">
+                                  {apiComments.map((comment) => (
+                                    <div key={comment.id} className="border-l-4 border-blue-500 pl-4 py-2">
+                                      <div className="flex justify-between items-start">
+                                        <div>
+                                          <p className="text-sm font-medium text-gray-900">{comment.userName}</p>
+                                          <p className="text-xs text-gray-500">{new Date(comment.timestamp).toLocaleString()}</p>
+                                        </div>
+                                      </div>
+                                      <p className="mt-1 text-sm text-gray-700">{comment.comment}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="text-sm text-gray-500">No comments yet. Add the first comment!</p>
+                              )}
+                            </div>
+
                             {/* Reason */}
                             <div className="bg-white rounded-lg p-3 border border-gray-200">
                               <p className="text-xs text-gray-500 mb-1">FORWARDING REASON</p>
@@ -563,7 +715,7 @@ const TappalDetail: React.FC = () => {
             <div className="flex items-center space-x-2">
               <MessageSquare className="h-5 w-5 text-blue-600" />
               <h2 className="text-lg font-semibold text-gray-900">Comments & Remarks</h2>
-              <span className="text-sm text-gray-500">({tappal.comments.length})</span>
+              <span className="text-sm text-gray-500">({apiComments.length})</span>
             </div>
             <button
               onClick={() => setShowCommentModal(true)}
@@ -574,7 +726,11 @@ const TappalDetail: React.FC = () => {
             </button>
           </div>
           
-          {tappal.comments.length === 0 ? (
+          {isLoadingComments ? (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+            </div>
+          ) : apiComments.length === 0 ? (
             <div className="text-center py-8">
               <MessageSquare className="h-12 w-12 text-gray-400 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-2">No comments yet</h3>
@@ -582,7 +738,7 @@ const TappalDetail: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-4">
-              {tappal.comments.map((comment) => (
+              {apiComments.map((comment) => (
                 <div key={comment.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                   <div className="flex items-start space-x-3">
                     <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center flex-shrink-0">
@@ -596,10 +752,37 @@ const TappalDetail: React.FC = () => {
                           <h4 className="text-sm font-medium text-gray-900">{comment.userName}</h4>
                           <p className="text-xs text-gray-500">{formatDateTime(comment.timestamp)}</p>
                         </div>
-                        {comment.userId === user?.id && (
-                          <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
-                            Your Comment
-                          </span>
+                        {(comment.userId === user?.id || user?.role === 'admin') && (
+                          <div className="flex items-center space-x-2">
+                            {comment.userId === user?.id && (
+                              <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
+                                Your Comment
+                              </span>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteComment(comment.id);
+                              }}
+                              disabled={deletingCommentId === comment.id}
+                              className="text-red-600 hover:text-red-800 disabled:opacity-50"
+                              title="Delete comment"
+                            >
+                              {deletingCommentId === comment.id ? (
+                                <span className="flex items-center">
+                                  <svg className="animate-spin -ml-1 mr-1 h-3 w-3 text-red-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                  </svg>
+                                  Deleting...
+                                </span>
+                              ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              )}
+                            </button>
+                          </div>
                         )}
                       </div>
                       <div className="bg-white rounded-lg p-3 border border-gray-200">
@@ -679,7 +862,7 @@ const TappalDetail: React.FC = () => {
                 </label>
                 <select
                   value={statusForm.newStatus}
-                  onChange={(e) => setStatusForm(prev => ({ ...prev, newStatus: e.target.value }))}
+                  onChange={(e) => setStatusForm(prev => ({ ...prev, newStatus: e.target.value as Tappal['status'] | '' }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
                 >
                   <option value="">Select new status...</option>

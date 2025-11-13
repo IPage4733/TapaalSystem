@@ -49,6 +49,7 @@ export interface Department {
   name: string;
   code: string;
   district: string;
+  state: string;
   contactEmail: string;
   headOfDepartment: string;
   createdAt: string;

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { 
@@ -8,21 +8,40 @@ import {
   BarChart3, 
   Users, 
   Clock, 
-  Send, 
-  User,
+  Send,
   Home,
   Paperclip,
-  Upload
+  Menu,
+  X
 } from 'lucide-react';
 
 const RiLayout: React.FC = () => {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const handleLogout = () => {
     logout();
     navigate('/login');
+  };
+
+  const isActivePath = (path: string) => {
+    if (path === '/ri-dashboard') {
+      return location.pathname === path;
+    }
+    return location.pathname.startsWith(path);
+  };
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen(prev => !prev);
+  };
+
+  const handleNavigation = (path: string) => {
+    navigate(path);
+    if (window.innerWidth < 1024) {
+      setIsSidebarOpen(false);
+    }
   };
 
   const navigationItems = [
@@ -36,23 +55,20 @@ const RiLayout: React.FC = () => {
     { path: '/ri-dashboard/search', icon: Search, label: 'Search' }
   ];
 
-  const isActivePath = (path: string) => {
-    if (path === '/ri-dashboard') {
-      return location.pathname === path;
-    }
-    return location.pathname.startsWith(path);
-  };
-
   return (
     <div className="min-h-screen bg-gray-50 flex">
       {/* Sidebar */}
-      <div className="w-64 bg-white shadow-lg flex flex-col">
+      <div
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-lg flex flex-col transform transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
         {/* Header */}
         <div className="p-6 border-b border-gray-200">
           <div className="flex items-center space-x-3">
             <div>
-        <img src="/image.png" alt="Logo" className="h-12 w-12" />
-      </div>
+              <img src="/image.png" alt="Logo" className="h-12 w-12" />
+            </div>
             <div>
               <h1 className="text-lg font-semibold text-gray-900">RI Portal</h1>
               <p className="text-sm text-gray-600">File Tracking System</p>
@@ -84,7 +100,7 @@ const RiLayout: React.FC = () => {
             return (
               <button
                 key={item.path}
-                onClick={() => navigate(item.path)}
+                onClick={() => handleNavigation(item.path)}
                 className={`w-full flex items-center space-x-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isActive
                     ? 'bg-teal-100 text-teal-700'
@@ -111,7 +127,29 @@ const RiLayout: React.FC = () => {
       </div>
 
       {/* Main Content */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/30"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
       <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-4 bg-white border-b border-gray-200 shadow-sm">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+          >
+            {isSidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+          </button>
+          <div className="flex items-center space-x-2">
+            <img src="/image.png" alt="Logo" className="h-10 w-10" />
+            <div>
+              <p className="text-sm font-semibold text-gray-900">RI Portal</p>
+              <p className="text-xs text-gray-500">File Tracking System</p>
+            </div>
+          </div>
+        </div>
         <main className="flex-1 overflow-auto">
           <Outlet />
         </main>
