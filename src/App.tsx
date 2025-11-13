@@ -19,6 +19,7 @@ import EmployeePerformance from './components/collector/EmployeePerformance';
 import OverdueTappals from './components/collector/OverdueTappals';
 import TrackPetitions from './components/collector/TrackPetitions';
 import ManageDepartments from './components/collector/ManageDepartments';
+import ManageRole from './components/collector/ManageRole';
 import UserManagement from './components/collector/UserManagement';
 import CollectorCreateTappal from './components/collector/CreateTappal';
 import TappalDetail from './components/tappal/TappalDetail';
@@ -159,6 +160,7 @@ function App() {
               <Route path="overdue" element={<OverdueTappals />} />
               <Route path="petitions" element={<TrackPetitions />} />
               <Route path="departments" element={<ManageDepartments />} />
+              <Route path="role" element={<ManageRole />} />
               <Route path="users" element={<UserManagement />} />
             </Route>
             
@@ -382,12 +384,13 @@ function App() {
               <Route path="create-officer" element={<CreateOfficer />} />
               <Route path="assignments" element={<ManageAssignments />} />
               <Route path="departments" element={<ManageDepartments />} />
+              <Route path="role" element={<ManageRole />} />
               <Route path="analytics" element={<SystemAnalytics />} />
               <Route path="performance" element={<PerformanceReports />} />
               <Route path="search" element={<GlobalSearch />} />
               <Route path="settings" element={<UserManagement />} />
             </Route>
-            
+            <Route path="/managerole" element={<ManageRole/>} />
             {/* Default redirect */}
             <Route path="/" element={<Navigate to="/user-portal" replace />} />
             <Route path="*" element={<Navigate to="/login" replace />} />

@@ -1,5 +1,9 @@
-export const formatDate = (dateString: string): string => {
+// src/utils/dateUtils.ts
+
+export const formatDate = (dateString?: string | null): string => {
+  if (!dateString) return '';
   const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return dateString;
   return date.toLocaleDateString('en-IN', {
     year: 'numeric',
     month: 'short',
@@ -7,8 +11,10 @@ export const formatDate = (dateString: string): string => {
   });
 };
 
-export const formatDateTime = (dateString: string): string => {
+export const formatDateTime = (dateString?: string | null): string => {
+  if (!dateString) return '';
   const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return dateString;
   return date.toLocaleString('en-IN', {
     year: 'numeric',
     month: 'short',
@@ -18,47 +24,83 @@ export const formatDateTime = (dateString: string): string => {
   });
 };
 
-export const getDaysOverdue = (expiryDate: string): number => {
-  const expiry = new Date(expiryDate);
-  const today = new Date();
-  const diffTime = today.getTime() - expiry.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+const parseExpiry = (expiryDate?: string | null): Date | null => {
+  if (!expiryDate) return null;
+  const trimmed = expiryDate.trim();
+  const dateOnlyRegex = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+  const normalized = dateOnlyRegex.test(trimmed) ? `${trimmed}T23:59:59` : trimmed;
+  const d = new Date(normalized);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+export const getDaysOverdue = (expiryDate?: string | null): number => {
+  const expiry = parseExpiry(expiryDate);
+  if (!expiry) return 0;
+  const now = new Date();
+  const diffMs = now.getTime() - expiry.getTime();
+  if (diffMs <= 0) return 0;
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
   return Math.max(0, diffDays);
 };
 
-export const isOverdue = (expiryDate: string, status: string): boolean => {
-  if (status === 'Completed') return false;
-  const expiry = new Date(expiryDate);
-  const today = new Date();
-  return today > expiry;
+export const isTappalOverdue = (expiryDate?: string | null, status?: string | null): boolean => {
+  const s = String(status || '').trim().toLowerCase();
+  if (isCompletedStatus(s)) return false;
+  const expiry = parseExpiry(expiryDate);
+  if (!expiry) return false;
+  return expiry.getTime() < Date.now();
 };
 
-export const getStatusColor = (status: string): string => {
-  switch (status) {
-    case 'Completed':
+// NEW: exported helper to check completed-like statuses
+export const isCompletedStatus = (status?: string | null): boolean => {
+  const s = String(status || '').trim().toLowerCase();
+  const completedStates = new Set([
+    'completed', 'closed', 'resolved', 'finalized', 'finished', 'done'
+  ]);
+  return completedStates.has(s);
+};
+
+/**
+ * Backwards-compatible alias (in case other files import `isOverdue`).
+ * But prefer using isTappalOverdue (expiry-based) or isCompletedStatus (status-based) as needed.
+ */
+export const isOverdue = (expiryDate?: string | null, status?: string | null): boolean => {
+  return isTappalOverdue(expiryDate, status);
+};
+
+export const getStatusColor = (status?: string | null): string => {
+  const s = String(status || '').trim().toLowerCase();
+  switch (s) {
+    case 'completed':
+    case 'closed':
       return 'text-green-600 bg-green-100';
-    case 'In Progress':
+    case 'in progress':
+    case 'in_progress':
+    case 'inprogress':
       return 'text-blue-600 bg-blue-100';
-    case 'Under Review':
+    case 'under review':
+    case 'under_review':
       return 'text-yellow-600 bg-yellow-100';
-    case 'Pending':
+    case 'pending':
+    case 'active':
       return 'text-gray-600 bg-gray-100';
-    case 'Rejected':
+    case 'rejected':
       return 'text-red-600 bg-red-100';
     default:
       return 'text-gray-600 bg-gray-100';
   }
 };
 
-export const getPriorityColor = (priority: string): string => {
-  switch (priority) {
-    case 'Urgent':
+export const getPriorityColor = (priority?: string | null): string => {
+  const p = String(priority || '').trim().toLowerCase();
+  switch (p) {
+    case 'urgent':
       return 'text-red-600 bg-red-100';
-    case 'High':
+    case 'high':
       return 'text-orange-600 bg-orange-100';
-    case 'Medium':
+    case 'medium':
       return 'text-yellow-600 bg-yellow-100';
-    case 'Low':
+    case 'low':
       return 'text-green-600 bg-green-100';
     default:
       return 'text-gray-600 bg-gray-100';

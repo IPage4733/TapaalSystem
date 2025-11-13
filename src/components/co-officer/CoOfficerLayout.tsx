@@ -35,6 +35,7 @@ const CoOfficerLayout: React.FC = () => {
     { path: '/co-officer-dashboard/create-officer', icon: UserPlus, label: 'Create Officer' },
     { path: '/co-officer-dashboard/assignments', icon: FileText, label: 'Manage Assignments' },
     { path: '/co-officer-dashboard/departments', icon: Building, label: 'Manage Departments' },
+    { path: '/co-officer-dashboard/role', icon: Building, label: 'Manage Roles' },
     { path: '/co-officer-dashboard/analytics', icon: BarChart3, label: 'System Analytics' },
     { path: '/co-officer-dashboard/performance', icon: Award, label: 'Performance Reports' },
     { path: '/co-officer-dashboard/search', icon: Search, label: 'Global Search' },
