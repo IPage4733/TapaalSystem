@@ -1,19 +1,48 @@
-import React, { useState, useMemo } from 'react';
+// src/components/co-officer/PerformanceReports.tsx
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Award, 
   TrendingUp, 
   Users, 
-  Calendar,
   Filter,
   Download,
-  FileText,
-  CheckCircle,
-  AlertTriangle,
-  Clock
+  AlertTriangle
 } from 'lucide-react';
-import { mockUsers } from '../../data/mockUsers';
-import { mockTappals } from '../../data/mockTappals';
-import { isOverdue } from '../../utils/dateUtils';
+import { isTappalOverdue } from '../../utils/dateUtils';
+
+const TAPPAL_API = 'https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals';
+const OFFICER_API = 'https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer';
+
+type OfficerFromApi = {
+  department?: string;
+  role?: string;
+  updatedAt?: string;
+  email?: string;
+  id: string;
+  name?: string;
+  phone?: string;
+};
+
+type TappalFromApi = {
+  id?: string;
+  tappalId?: string;
+  subject?: string;
+  description?: string;
+  assignedTo?: string;
+  assignedToName?: string;
+  department?: string;
+  departmentName?: string;
+  priority?: string;
+  status?: string;
+  createdAt?: string;
+  expiryDate?: string;
+  petitionId?: string;
+  isConfidential?: boolean;
+  createdBy?: string;
+  lastUpdated?: string;
+  comments?: any[];
+  attachments?: any[];
+};
 
 const PerformanceReports: React.FC = () => {
   const [filters, setFilters] = useState({
@@ -22,54 +51,12 @@ const PerformanceReports: React.FC = () => {
     period: 'all'
   });
 
-  const officers = mockUsers.filter(u => u.role !== 'co_officer');
+  const [officers, setOfficers] = useState<OfficerFromApi[]>([]);
+  const [tappals, setTappals] = useState<TappalFromApi[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const performanceData = useMemo(() => {
-    const performance: any[] = [];
-
-    officers.forEach(officer => {
-      const officerTappals = mockTappals.filter(t => t.assignedTo === officer.id);
-      const completed = officerTappals.filter(t => t.status === 'Completed').length;
-      const pending = officerTappals.filter(t => t.status === 'Pending').length;
-      const inProgress = officerTappals.filter(t => t.status === 'In Progress').length;
-      const overdue = officerTappals.filter(t => isOverdue(t.expiryDate, t.status)).length;
-      
-      // Calculate average completion time (mock calculation)
-      const avgCompletionTime = completed > 0 ? Math.round(Math.random() * 10 + 5) : 0;
-      
-      // Calculate completion rate
-      const completionRate = officerTappals.length > 0 ? Math.round((completed / officerTappals.length) * 100) : 0;
-      
-      // Calculate on-time completion
-      const onTimeCompleted = Math.max(0, completed - Math.floor(overdue * 0.3));
-      const onTimeRate = completed > 0 ? Math.round((onTimeCompleted / completed) * 100) : 0;
-
-      performance.push({
-        officer: officer.name,
-        role: officer.role,
-        department: officer.department,
-        email: officer.email,
-        phone: officer.phoneNumber,
-        total: officerTappals.length,
-        completed,
-        pending,
-        inProgress,
-        overdue,
-        completionRate,
-        onTimeRate,
-        avgCompletionTime,
-        rating: getPerformanceRating(completionRate, onTimeRate, overdue)
-      });
-    });
-
-    // Apply filters
-    return performance.filter(p => {
-      const matchesRole = !filters.role || p.role === filters.role;
-      const matchesDepartment = !filters.department || p.department.toLowerCase().includes(filters.department.toLowerCase());
-      return matchesRole && matchesDepartment;
-    }).sort((a, b) => b.completionRate - a.completionRate);
-  }, [officers, filters]);
-
+  // helpers (must be declared before useMemo)
   const getPerformanceRating = (completionRate: number, onTimeRate: number, overdue: number) => {
     if (completionRate >= 90 && onTimeRate >= 85 && overdue <= 2) return 'Excellent';
     if (completionRate >= 75 && onTimeRate >= 70 && overdue <= 5) return 'Good';
@@ -87,7 +74,8 @@ const PerformanceReports: React.FC = () => {
     }
   };
 
-  const getRoleDisplayName = (role: string) => {
+  const getRoleDisplayName = (role?: string) => {
+    const key = (role || '').toLowerCase();
     const roleNames: Record<string, string> = {
       collector: 'District Collector',
       joint_collector: 'Joint Collector',
@@ -96,39 +84,172 @@ const PerformanceReports: React.FC = () => {
       tahsildar: 'Tahsildar',
       naib_tahsildar: 'Naib Tahsildar',
       ri: 'Revenue Inspector',
+      'revenue inspector': 'Revenue Inspector',
+      'village revenue officer': 'Village Revenue Officer',
       vro: 'Village Revenue Officer',
       clerk: 'Clerk'
     };
-    return roleNames[role] || role;
+    return roleNames[key] || role || 'Officer';
   };
 
-  const roleOptions = [...new Set(officers.map(o => o.role))];
+  // fetch data
+  useEffect(() => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+
+    async function fetchData() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [offRes, tapRes] = await Promise.all([
+          fetch(OFFICER_API, { signal }),
+          fetch(TAPPAL_API, { signal })
+        ]);
+
+        if (!offRes.ok) throw new Error(`Officer API error: ${offRes.status}`);
+        if (!tapRes.ok) throw new Error(`Tappal API error: ${tapRes.status}`);
+
+        const offJson = await offRes.json();
+        const tapJson = await tapRes.json();
+
+        // Normalize officers
+        let fetchedOfficers: OfficerFromApi[] = [];
+        if (Array.isArray(offJson)) {
+          fetchedOfficers = offJson as OfficerFromApi[];
+        } else if (Array.isArray(offJson?.officers)) {
+          fetchedOfficers = offJson.officers as OfficerFromApi[];
+        } else if (Array.isArray(offJson?.data)) {
+          fetchedOfficers = offJson.data as OfficerFromApi[];
+        } else if (offJson && typeof offJson === 'object' && offJson.id) {
+          fetchedOfficers = [offJson as OfficerFromApi];
+        } else {
+          fetchedOfficers = [];
+        }
+        setOfficers(fetchedOfficers);
+
+        // Normalize tappals
+        let fetchedTappals: TappalFromApi[] = [];
+        if (Array.isArray(tapJson)) {
+          fetchedTappals = tapJson as TappalFromApi[];
+        } else if (Array.isArray(tapJson?.tappals)) {
+          fetchedTappals = tapJson.tappals as TappalFromApi[];
+        } else if (Array.isArray(tapJson?.data)) {
+          fetchedTappals = tapJson.data as TappalFromApi[];
+        } else {
+          fetchedTappals = [];
+        }
+        setTappals(fetchedTappals);
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error(err);
+          setError(err.message || 'Failed to fetch data');
+          setOfficers([]);
+          setTappals([]);
+        }
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchData();
+    return () => controller.abort();
+  }, []);
+
+  const roleOptions = Array.from(new Set((officers || []).map(o => o.role))).filter(Boolean);
+
+  const performanceData = useMemo(() => {
+    const performance: any[] = [];
+
+    const relevantOfficers = Array.isArray(officers) ? officers.filter(o => (o.role || '').toLowerCase() !== 'co_officer') : [];
+
+    relevantOfficers.forEach(officer => {
+      const officerTappals = (tappals || []).filter(t => (t.assignedTo || '').toString() === officer.id.toString());
+
+      const completed = officerTappals.filter(t => {
+        const s = (t.status || '').toLowerCase();
+        return s === 'completed' || s === 'closed' || s === 'resolved';
+      }).length;
+
+      const pending = officerTappals.filter(t => {
+        const s = (t.status || '').toLowerCase();
+        return s === 'pending' || s === 'active' || s === 'for_review' || s === 'forwarded' || s === 'active';
+      }).length;
+
+      const inProgress = officerTappals.filter(t => {
+        const s = (t.status || '').toLowerCase();
+        return s === 'in progress' || s === 'in_progress' || s === 'inprogress' || s === 'under review';
+      }).length;
+
+      const overdue = officerTappals.filter(t => isTappalOverdue(t.expiryDate || '', t.status || '')).length;
+
+      // deterministic avg completion: use createdAt & lastUpdated where available
+      const completedWithTimes = officerTappals.filter(t => t.createdAt && t.lastUpdated);
+      const avgCompletionTime = completedWithTimes.length > 0
+        ? Math.round(completedWithTimes.reduce((sum, t) => {
+            try {
+              const start = new Date(t.createdAt!).getTime();
+              const end = new Date(t.lastUpdated!).getTime();
+              const days = Math.max(0, Math.round((end - start) / (1000 * 60 * 60 * 24)));
+              return sum + days;
+            } catch {
+              return sum;
+            }
+          }, 0) / completedWithTimes.length)
+        : 0;
+
+      const completionRate = officerTappals.length > 0 ? Math.round((completed / officerTappals.length) * 100) : 0;
+      const onTimeCompleted = Math.max(0, completed - Math.floor(overdue * 0.3));
+      const onTimeRate = completed > 0 ? Math.round((onTimeCompleted / completed) * 100) : 0;
+
+      performance.push({
+        officer: officer.name || officer.id,
+        role: officer.role || '',
+        department: officer.department || '',
+        email: officer.email,
+        phone: officer.phone,
+        total: officerTappals.length,
+        completed,
+        pending,
+        inProgress,
+        overdue,
+        completionRate,
+        onTimeRate,
+        avgCompletionTime,
+        rating: getPerformanceRating(completionRate, onTimeRate, overdue)
+      });
+    });
+
+    // Apply filters
+    return performance.filter(p => {
+      const matchesRole = !filters.role || (p.role || '').toLowerCase() === filters.role.toLowerCase();
+      const matchesDepartment = !filters.department || (p.department || '').toLowerCase().includes(filters.department.toLowerCase());
+      return matchesRole && matchesDepartment;
+    }).sort((a, b) => b.completionRate - a.completionRate);
+  }, [officers, tappals, filters]);
 
   const summaryStats = useMemo(() => {
     const totalOfficers = performanceData.length;
     const excellentPerformers = performanceData.filter(p => p.rating === 'Excellent').length;
-    const avgCompletionRate = totalOfficers > 0 
+    const avgCompletionRate = totalOfficers > 0
       ? Math.round(performanceData.reduce((sum, p) => sum + p.completionRate, 0) / totalOfficers)
       : 0;
     const totalOverdue = performanceData.reduce((sum, p) => sum + p.overdue, 0);
-
     return { totalOfficers, excellentPerformers, avgCompletionRate, totalOverdue };
   }, [performanceData]);
 
   const handleExportReport = () => {
-    // Mock export functionality
     const csvContent = [
       ['Officer', 'Role', 'Department', 'Total Tappals', 'Completed', 'Completion Rate', 'On-Time Rate', 'Overdue', 'Rating'].join(','),
       ...performanceData.map(p => [
-        p.officer,
-        getRoleDisplayName(p.role),
-        p.department,
+        `"${p.officer}"`,
+        `"${getRoleDisplayName(p.role)}"`,
+        `"${p.department}"`,
         p.total,
         p.completed,
         `${p.completionRate}%`,
         `${p.onTimeRate}%`,
         p.overdue,
-        p.rating
+        `"${p.rating}"`
       ].join(','))
     ].join('\n');
 
@@ -140,6 +261,14 @@ const PerformanceReports: React.FC = () => {
     a.click();
     window.URL.revokeObjectURL(url);
   };
+
+  if (loading) {
+    return <div className="p-6">Loading performance reports...</div>;
+  }
+
+  if (error) {
+    return <div className="p-6 text-red-600">Error loading data: {error}</div>;
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -254,44 +383,22 @@ const PerformanceReports: React.FC = () => {
       {/* Performance Table */}
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">
-            Officer Performance Report ({performanceData.length})
-          </h2>
+          <h2 className="text-lg font-semibold text-gray-900">Officer Performance Report ({performanceData.length})</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Officer
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Role
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Department
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Total
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Completed
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Completion Rate
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  On-Time Rate
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Overdue
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Avg. Time
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Rating
-                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Officer</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Completed</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Completion Rate</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">On-Time Rate</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Overdue</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Avg. Time</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rating</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -301,7 +408,7 @@ const PerformanceReports: React.FC = () => {
                     <div className="flex items-center space-x-3">
                       <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
                         <span className="text-purple-600 font-medium text-xs">
-                          {officer.officer.split(' ').map((n: string) => n[0]).join('')}
+                          {String(officer.officer || '').split(' ').filter(Boolean).map((n: string) => n[0]).join('')}
                         </span>
                       </div>
                       <div>
@@ -310,50 +417,23 @@ const PerformanceReports: React.FC = () => {
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {getRoleDisplayName(officer.role)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {officer.department}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {officer.total}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
-                    {officer.completed}
-                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{getRoleDisplayName(officer.role)}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{officer.department}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{officer.total}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">{officer.completed}</td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center space-x-2">
-                      <span className={`text-sm font-medium ${
-                        officer.completionRate >= 80 ? 'text-green-600' :
-                        officer.completionRate >= 60 ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {officer.completionRate}%
-                      </span>
+                      <span className={`text-sm font-medium ${officer.completionRate >= 80 ? 'text-green-600' : officer.completionRate >= 60 ? 'text-yellow-600' : 'text-red-600'}`}>{officer.completionRate}%</span>
                       <div className="w-16 bg-gray-200 rounded-full h-2">
-                        <div
-                          className={`h-2 rounded-full ${
-                            officer.completionRate >= 80 ? 'bg-green-500' :
-                            officer.completionRate >= 60 ? 'bg-yellow-500' : 'bg-red-500'
-                          }`}
-                          style={{ width: `${officer.completionRate}%` }}
-                        ></div>
+                        <div className={`h-2 rounded-full ${officer.completionRate >= 80 ? 'bg-green-500' : officer.completionRate >= 60 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${officer.completionRate}%` }} />
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-600">
-                    {officer.onTimeRate}%
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">
-                    {officer.overdue}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {officer.avgCompletionTime} days
-                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-600">{officer.onTimeRate}%</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-red-600">{officer.overdue}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{officer.avgCompletionTime} days</td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRatingColor(officer.rating)}`}>
-                      {officer.rating}
-                    </span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRatingColor(officer.rating)}`}>{officer.rating}</span>
                   </td>
                 </tr>
               ))}
@@ -375,27 +455,19 @@ const PerformanceReports: React.FC = () => {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Performance Distribution</h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="text-center p-4 bg-green-50 rounded-lg">
-            <div className="text-2xl font-bold text-green-600 mb-1">
-              {performanceData.filter(p => p.rating === 'Excellent').length}
-            </div>
+            <div className="text-2xl font-bold text-green-600 mb-1">{performanceData.filter(p => p.rating === 'Excellent').length}</div>
             <p className="text-sm text-green-700">Excellent</p>
           </div>
           <div className="text-center p-4 bg-blue-50 rounded-lg">
-            <div className="text-2xl font-bold text-blue-600 mb-1">
-              {performanceData.filter(p => p.rating === 'Good').length}
-            </div>
+            <div className="text-2xl font-bold text-blue-600 mb-1">{performanceData.filter(p => p.rating === 'Good').length}</div>
             <p className="text-sm text-blue-700">Good</p>
           </div>
           <div className="text-center p-4 bg-yellow-50 rounded-lg">
-            <div className="text-2xl font-bold text-yellow-600 mb-1">
-              {performanceData.filter(p => p.rating === 'Average').length}
-            </div>
+            <div className="text-2xl font-bold text-yellow-600 mb-1">{performanceData.filter(p => p.rating === 'Average').length}</div>
             <p className="text-sm text-yellow-700">Average</p>
           </div>
           <div className="text-center p-4 bg-red-50 rounded-lg">
-            <div className="text-2xl font-bold text-red-600 mb-1">
-              {performanceData.filter(p => p.rating === 'Needs Improvement').length}
-            </div>
+            <div className="text-2xl font-bold text-red-600 mb-1">{performanceData.filter(p => p.rating === 'Needs Improvement').length}</div>
             <p className="text-sm text-red-700">Needs Improvement</p>
           </div>
         </div>

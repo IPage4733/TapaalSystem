@@ -1,21 +1,33 @@
-import React, { useState } from 'react';
+// src/components/user/SubmitPetition.tsx
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   FileText, 
-  User, 
-  Phone, 
-  MapPin, 
   Upload,
   Save,
   X,
   CheckCircle,
   AlertCircle,
-  Building,
-  Calendar,
   Paperclip,
   Plus
 } from 'lucide-react';
 import { mockDepartments } from '../../data/mockTappals';
+
+const API_BASE = 'https://ec8jdej696.execute-api.ap-southeast-1.amazonaws.com/dev';
+const API_BASE_2 = 'https://ik7oyuh5a7.execute-api.ap-southeast-1.amazonaws.com/dev';
+const DEPTS_URL = 'https://1qgedzknw2.execute-api.ap-southeast-1.amazonaws.com/prod/departmentsnew';
+
+type Department = {
+  id: string;
+  departmentName: string;
+  departmentCode?: string;
+  district?: string;
+  state?: string;
+  contactEmail?: string;
+  headOfDepartment?: string;
+  status?: string;
+  createdAt?: string;
+};
 
 const SubmitPetition: React.FC = () => {
   const navigate = useNavigate();
@@ -23,46 +35,29 @@ const SubmitPetition: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [generatedPetitionId, setGeneratedPetitionId] = useState('');
+  const [departments, setDepartments] = useState<Department[]>(mockDepartments as unknown as Department[]);
+  const [deptsLoading, setDeptsLoading] = useState(false);
+  const [deptsError, setDeptsError] = useState<string | null>(null);
   
   const [formData, setFormData] = useState({
-    // Petition Details
     petitionType: '',
     subject: '',
     description: '',
-    
-    // Personal Information
     fullName: '',
     mobileNumber: '',
     aadharNumber: '',
     address: '',
-    
-    // Department Selection
     department: '',
-    
-    // File Uploads
-    attachments: [] as string[]
+    attachments: [] as File[]
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const petitionTypes = [
-    'Issue',
-    'Request', 
-    'Complaint',
-    'Suggestion',
-    'Land Revenue',
-    'Property Tax',
-    'Birth Certificate',
-    'Death Certificate',
-    'Income Certificate',
-    'Caste Certificate',
-    'Residence Certificate',
-    'Water Connection',
-    'Building Permission',
-    'Road Construction',
-    'Drainage Issues',
-    'Electricity Connection',
-    'Other'
+    'Issue','Request','Complaint','Suggestion','Land Revenue','Property Tax',
+    'Birth Certificate','Death Certificate','Income Certificate','Caste Certificate',
+    'Residence Certificate','Water Connection','Building Permission','Road Construction',
+    'Drainage Issues','Electricity Connection','Other'
   ];
 
   const steps = [
@@ -71,6 +66,36 @@ const SubmitPetition: React.FC = () => {
     { number: 3, title: 'Department & Files', description: 'Select department and upload files' },
     { number: 4, title: 'Review & Submit', description: 'Review your petition before submission' }
   ];
+
+  // Fetch departments on mount
+  useEffect(() => {
+    let aborted = false;
+    const controller = new AbortController();
+
+    const fetchDepts = async () => {
+      setDeptsLoading(true);
+      setDeptsError(null);
+      try {
+        const resp = await fetch(DEPTS_URL, { signal: controller.signal });
+        if (!resp.ok) throw new Error(`Failed to fetch departments: ${resp.status}`);
+        const data = await resp.json();
+        if (!aborted && Array.isArray(data) && data.length > 0) {
+          setDepartments(data);
+        }
+      } catch (err) {
+        // keep mockDepartments already set
+      } finally {
+        if (!aborted) setDeptsLoading(false);
+      }
+    };
+
+    fetchDepts();
+
+    return () => {
+      aborted = true;
+      controller.abort();
+    };
+  }, []);
 
   const validateStep = (step: number): boolean => {
     const newErrors: Record<string, string> = {};
@@ -115,10 +140,9 @@ const SubmitPetition: React.FC = () => {
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
     if (files) {
-      const fileNames = Array.from(files).map(file => file.name);
       setFormData(prev => ({ 
         ...prev, 
-        attachments: [...prev.attachments, ...fileNames] 
+        attachments: [...prev.attachments, ...Array.from(files)] 
       }));
     }
   };
@@ -130,22 +154,114 @@ const SubmitPetition: React.FC = () => {
     }));
   };
 
-  const handleSubmit = async () => {
-    if (!validateStep(3)) return;
+  // Upload files using the new upload API endpoint. Falls back to presign flow, then to filenames.
+// src/components/user/SubmitPetition.tsx
 
-    setIsSubmitting(true);
-    
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Generate petition ID
-    const petitionId = `PET-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(Math.floor(Math.random() * 900) + 100).padStart(3, '0')}`;
-    setGeneratedPetitionId(petitionId);
-    
-    setIsSubmitting(false);
+// ... (keep the function signature the same)
+const uploadFilesAndGetUrls = async (files: File[]): Promise<string[]> => {
+  if (!files || files.length === 0) return [];
+
+  const uploadedUrls: string[] = [];
+
+  for (const file of files) {
+    // ⚠️ CRITICAL CHANGE: Use the raw 'file' object as the body
+    //    and DO NOT set a Content-Type header manually.
+    //    The browser will automatically set the correct Content-Type (e.g., image/jpeg)
+    //    and Content-Length for the raw file data.
+
+    try {
+      const resp = await fetch(`${API_BASE_2}/upload`, {
+        method: 'POST',
+
+        body: file // Send the raw file data directly
+      });
+
+      if (!resp.ok) {
+        console.error(`Upload failed for ${file.name}: ${resp.status}`);
+        // Log the response text for better debugging
+        const errorText = await resp.text();
+        console.error(`Server error details: ${errorText}`);
+        continue;
+      }
+
+      const data = await resp.json();
+      if (data.url) uploadedUrls.push(data.url);
+    } catch (error) {
+      console.error(`Error uploading ${file.name}:`, error);
+    }
+  }
+
+  return uploadedUrls;
+};
+
+
+const handleSubmit = async () => {
+  if (!validateStep(3)) return;
+
+  // DEBUG: Check what we're actually sending
+  console.log('Form Data:', formData);
+  console.log('Selected Department ID:', formData.department);
+  console.log('Available Departments:', departments);
+
+  setIsSubmitting(true);
+  setErrors({});
+
+  try {
+    const attachmentUrls = await uploadFilesAndGetUrls(formData.attachments);
+
+    // Resolve department name from departments list (fallback to empty string)
+    const selectedDept = departments.find(d => d.id === formData.department);
+    const departmentName = selectedDept?.departmentName || '';
+
+    // Build payload with departmentName and a couple of sane defaults
+    const payload = {
+      petitionType: formData.petitionType || 'Other',
+      subject: formData.subject,
+      description: formData.description,
+      fullName: formData.fullName,
+      mobileNumber: formData.mobileNumber,
+      aadharNumber: formData.aadharNumber,
+      address: formData.address,
+      departmentId: formData.department,      // required by API
+      departmentName: departmentName,         // NEW: send department name separately
+      attachments: attachmentUrls,
+      // Optional/extra fields your backend sample showed — adjust/remove if you prefer
+      status: 'Submitted',                    // server may override, but useful as a default
+      confidential: false,                    // default — change via UI if needed
+      tappalId: '',                           // if you generate tappal IDs client-side add here
+      // do NOT send createdAt — let the server create timestamps
+    };
+
+    console.log('Final Payload:', payload);
+
+    const resp = await fetch(`${API_BASE}/newpetition`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await resp.json();
+    console.log('API Response:', data);
+
+    if (!resp.ok) {
+      setErrors({ submit: data?.message || 'Failed to create petition' });
+      setIsSubmitting(false);
+      return;
+    }
+
+    setGeneratedPetitionId(data.petitionId || data.petitionID || data.id || '');
     setShowSuccess(true);
-  };
+  } catch (error) {
+    console.error('Submit error', error);
+    setErrors(prev => ({ ...prev, submit: (error as Error).message || 'Submission failed' }));
+  } finally {
+    setIsSubmitting(false);
+  }
+};
 
+      
   const handleReset = () => {
     setFormData({
       petitionType: '',
@@ -184,7 +300,7 @@ const SubmitPetition: React.FC = () => {
           </div>
           
           <div className="text-gray-600 space-y-2 mb-8">
-            <p>✅ Your petition has been submitted to the {mockDepartments.find(d => d.id === formData.department)?.name}</p>
+            <p>✅ Your petition has been submitted to the {departments.find(d => d.id === formData.department)?.departmentName}</p>
             <p>📱 You will receive SMS updates on your mobile number</p>
             <p>⏰ Expected resolution time: 30 days</p>
             <p>🔍 Use your Petition ID to track status anytime</p>
@@ -251,13 +367,11 @@ const SubmitPetition: React.FC = () => {
 
       {/* Form */}
       <div className="bg-white rounded-xl shadow-lg p-8">
-        {/* Step 1: Petition Details */}
+        {/* Step 1 */}
         {currentStep === 1 && (
-          <div className="space-y-6">
+          <div className="space-y-6">{/* ... same as before ... */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Petition Type *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Petition Type *</label>
               <select
                 value={formData.petitionType}
                 onChange={(e) => setFormData(prev => ({ ...prev, petitionType: e.target.value }))}
@@ -266,19 +380,13 @@ const SubmitPetition: React.FC = () => {
                 }`}
               >
                 <option value="">Select petition type...</option>
-                {petitionTypes.map(type => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
+                {petitionTypes.map(type => <option key={type} value={type}>{type}</option>)}
               </select>
-              {errors.petitionType && (
-                <p className="mt-1 text-sm text-red-600">{errors.petitionType}</p>
-              )}
+              {errors.petitionType && <p className="mt-1 text-sm text-red-600">{errors.petitionType}</p>}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Subject *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Subject *</label>
               <input
                 type="text"
                 value={formData.subject}
@@ -288,15 +396,11 @@ const SubmitPetition: React.FC = () => {
                 }`}
                 placeholder="Brief subject of your petition"
               />
-              {errors.subject && (
-                <p className="mt-1 text-sm text-red-600">{errors.subject}</p>
-              )}
+              {errors.subject && <p className="mt-1 text-sm text-red-600">{errors.subject}</p>}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Description *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Description *</label>
               <textarea
                 value={formData.description}
                 onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
@@ -318,14 +422,12 @@ const SubmitPetition: React.FC = () => {
           </div>
         )}
 
-        {/* Step 2: Personal Information */}
+        {/* Step 2 */}
         {currentStep === 2 && (
-          <div className="space-y-6">
+          <div className="space-y-6">{/* ... same as before ... */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Full Name *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
                 <input
                   type="text"
                   value={formData.fullName}
@@ -335,15 +437,11 @@ const SubmitPetition: React.FC = () => {
                   }`}
                   placeholder="Enter your full name"
                 />
-                {errors.fullName && (
-                  <p className="mt-1 text-sm text-red-600">{errors.fullName}</p>
-                )}
+                {errors.fullName && <p className="mt-1 text-sm text-red-600">{errors.fullName}</p>}
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Mobile Number *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Mobile Number *</label>
                 <input
                   type="tel"
                   value={formData.mobileNumber}
@@ -353,16 +451,12 @@ const SubmitPetition: React.FC = () => {
                   }`}
                   placeholder="10-digit mobile number"
                 />
-                {errors.mobileNumber && (
-                  <p className="mt-1 text-sm text-red-600">{errors.mobileNumber}</p>
-                )}
+                {errors.mobileNumber && <p className="mt-1 text-sm text-red-600">{errors.mobileNumber}</p>}
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Aadhar Number (Optional)
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Aadhar Number (Optional)</label>
               <input
                 type="text"
                 value={formData.aadharNumber}
@@ -372,15 +466,11 @@ const SubmitPetition: React.FC = () => {
                 }`}
                 placeholder="12-digit Aadhar number"
               />
-              {errors.aadharNumber && (
-                <p className="mt-1 text-sm text-red-600">{errors.aadharNumber}</p>
-              )}
+              {errors.aadharNumber && <p className="mt-1 text-sm text-red-600">{errors.aadharNumber}</p>}
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Address *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Address *</label>
               <textarea
                 value={formData.address}
                 onChange={(e) => setFormData(prev => ({ ...prev, address: e.target.value }))}
@@ -390,44 +480,44 @@ const SubmitPetition: React.FC = () => {
                 }`}
                 placeholder="Enter your complete address including village/city, district, state, and PIN code"
               />
-              {errors.address && (
-                <p className="mt-1 text-sm text-red-600">{errors.address}</p>
-              )}
+              {errors.address && <p className="mt-1 text-sm text-red-600">{errors.address}</p>}
             </div>
           </div>
         )}
 
-        {/* Step 3: Department & Files */}
+        {/* Step 3 */}
         {currentStep === 3 && (
           <div className="space-y-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select Department *
-              </label>
-              <select
-                value={formData.department}
-                onChange={(e) => setFormData(prev => ({ ...prev, department: e.target.value }))}
-                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.department ? 'border-red-300' : 'border-gray-300'
-                }`}
-              >
-                <option value="">Select the relevant department...</option>
-                {mockDepartments.map(dept => (
-                  <option key={dept.id} value={dept.id}>{dept.name}</option>
-                ))}
-              </select>
-              {errors.department && (
-                <p className="mt-1 text-sm text-red-600">{errors.department}</p>
-              )}
-              <p className="mt-1 text-sm text-gray-500">
-                Your petition will be automatically routed to the selected department
-              </p>
-            </div>
+           
+<div>
+  <label className="block text-sm font-medium text-gray-700 mb-2">Select Department *</label>
+  <select
+    value={formData.department}
+    onChange={(e) => {
+      console.log('Department selected:', e.target.value); // DEBUG
+      setFormData(prev => ({ ...prev, department: e.target.value }));
+    }}
+    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+      errors.department ? 'border-red-300' : 'border-gray-300'
+    }`}
+    disabled={deptsLoading}
+  >
+    <option value="">{deptsLoading ? 'Loading departments...' : 'Select the relevant department...'}</option>
+    {departments.map(dept => (
+      <option key={dept.id} value={dept.id}>
+        {dept.departmentName} {dept.departmentCode ? `(${dept.departmentCode})` : ''}
+      </option>
+    ))}
+  </select>
+  {errors.department && <p className="mt-1 text-sm text-red-600">{errors.department}</p>}
+  {deptsError && <p className="mt-1 text-sm text-yellow-700">{deptsError}</p>}
+  <p className="mt-1 text-sm text-gray-500">
+    Selected: {formData.department ? departments.find(d => d.id === formData.department)?.departmentName : 'None'}
+  </p>
+</div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Upload Supporting Documents (Optional)
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Upload Supporting Documents (Optional)</label>
               <div className="space-y-3">
                 <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
                   <Upload className="h-12 w-12 text-gray-400 mx-auto mb-4" />
@@ -446,21 +536,18 @@ const SubmitPetition: React.FC = () => {
                     <Paperclip className="h-4 w-4 mr-2" />
                     Choose Files
                   </label>
-                  <p className="text-sm text-gray-500 mt-2">
-                    Supported formats: PDF, DOC, DOCX, JPG, JPEG, PNG, TXT (Max 10MB per file)
-                  </p>
+                  <p className="text-sm text-gray-500 mt-2">Supported formats: PDF, DOC, DOCX, JPG, JPEG, PNG, TXT (Max 10MB per file)</p>
                 </div>
-                
-                {/* Display attached files */}
+
                 {formData.attachments.length > 0 && (
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-gray-700">Attached Files:</p>
                     <div className="space-y-1">
-                      {formData.attachments.map((fileName, index) => (
+                      {formData.attachments.map((file, index) => (
                         <div key={index} className="flex items-center justify-between bg-gray-50 rounded-lg p-3">
                           <div className="flex items-center space-x-2">
                             <FileText className="h-4 w-4 text-gray-500" />
-                            <span className="text-sm text-gray-700">{fileName}</span>
+                            <span className="text-sm text-gray-700">{file.name}</span>
                           </div>
                           <button
                             type="button"
@@ -491,9 +578,9 @@ const SubmitPetition: React.FC = () => {
           </div>
         )}
 
-        {/* Step 4: Review & Submit */}
+        {/* Step 4 */}
         {currentStep === 4 && (
-          <div className="space-y-6">
+          <div className="space-y-6">{/* ... same as before ... */}
             <h3 className="text-lg font-semibold text-gray-900 mb-4">Review Your Petition</h3>
             
             <div className="bg-gray-50 rounded-lg p-6 space-y-4">
@@ -504,7 +591,7 @@ const SubmitPetition: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-sm text-gray-600">Department</p>
-                  <p className="font-medium">{mockDepartments.find(d => d.id === formData.department)?.name}</p>
+                  <p className="font-medium">{departments.find(d => d.id === formData.department)?.departmentName}</p>
                 </div>
                 <div className="md:col-span-2">
                   <p className="text-sm text-gray-600">Subject</p>
@@ -556,7 +643,7 @@ const SubmitPetition: React.FC = () => {
           </div>
         )}
 
-        {/* Navigation Buttons */}
+        {/* Navigation */}
         <div className="flex items-center justify-between pt-8 border-t border-gray-200">
           <button
             onClick={handlePrevious}
@@ -604,6 +691,9 @@ const SubmitPetition: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* Show submission errors */}
+        {errors.submit && <p className="mt-4 text-sm text-red-600">{errors.submit}</p>}
       </div>
     </div>
   );
