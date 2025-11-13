@@ -1,5 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { getCommentsByTappalId, addComment as addCommentApi, deleteComment as deleteCommentApi } from '../../services/commentService';
+import { updateTapalStatus } from '../../services/tapalApiService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../common/ToastContainer';
 import {
@@ -25,6 +27,7 @@ import {
   Save
 } from 'lucide-react';
 import { formatDate, formatDateTime, getDaysOverdue, isOverdue, getStatusColor, getPriorityColor } from '../../utils/dateUtils';
+import { Tappal } from '../../types/Tappal';
 
 const TAPPAL_API = 'https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals';
 const MOVEMENT_API_BULK = 'https://zq5wahnb2d.execute-api.ap-southeast-1.amazonaws.com/dev/forward';

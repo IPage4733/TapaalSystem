@@ -67,6 +67,72 @@ const ManageDepartments: React.FC = () => {
     contactEmail: "",
     headOfDepartment: "",
   });
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const setDepartmentsWithCache = (update: Department[] | ((prev: Department[]) => Department[])) => {
+    setDepartments(prev => {
+      const next = typeof update === 'function' ? (update as (prevDepartments: Department[]) => Department[])(prev) : update;
+      localStorage.setItem(DEPARTMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
+  const normalizeDepartment = (rawDepartment: unknown): Department | null => {
+    if (!rawDepartment || typeof rawDepartment !== 'object') {
+      return null;
+    }
+
+    const data = rawDepartment as Record<string, unknown>;
+
+    const getString = (key: string, fallbackKeys: string[] = []): string | undefined => {
+      if (typeof data[key] === 'string' && data[key]) {
+        return (data[key] as string).trim();
+      }
+      for (const fallbackKey of fallbackKeys) {
+        if (typeof data[fallbackKey] === 'string' && data[fallbackKey]) {
+          return (data[fallbackKey] as string).trim();
+        }
+      }
+      return undefined;
+    };
+
+    const id = getString('id', ['_id', 'departmentId']);
+    const name = getString('name', ['departmentName']);
+    const code = getString('code', ['departmentCode']) ?? (name ? name.slice(0, 3).toUpperCase() : 'DEP');
+    const state = getString('state', ['stateName']) ?? 'Unknown State';
+    const district = getString('district', ['districtName']) ?? 'Unknown District';
+    const contactEmail = getString('contactEmail', ['email']) ?? 'contact@example.com';
+    const headOfDepartment = getString('headOfDepartment', ['hod', 'head']) ?? 'Not Assigned';
+    const createdAtValue = getString('createdAt', ['created_on', 'createdDate']);
+
+    const createdAt = createdAtValue && !Number.isNaN(Date.parse(createdAtValue))
+      ? new Date(createdAtValue).toISOString()
+      : new Date().toISOString();
+
+    const isActiveValue = data['isActive'] ?? data['active'] ?? data['status'];
+    const isActive = typeof isActiveValue === 'boolean'
+      ? isActiveValue
+      : typeof isActiveValue === 'string'
+        ? ['active', 'true', '1'].includes(isActiveValue.toLowerCase())
+        : true;
+
+    if (!id || !name) {
+      return null;
+    }
+
+    return {
+      id,
+      name,
+      code,
+      district,
+      state,
+      contactEmail,
+      headOfDepartment,
+      createdAt,
+      isActive
+    };
+  };
 
   const statesData: { state: string; districts: string[] }[] =
     (statesJson as any) || [];
@@ -548,6 +614,9 @@ const ManageDepartments: React.FC = () => {
           <h2 className="text-lg font-semibold text-gray-900">
             Departments ({departments.length})
           </h2>
+          {loadError && (
+            <p className="mt-2 text-sm text-red-600">{loadError}</p>
+          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
