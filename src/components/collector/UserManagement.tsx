@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { 
   Users, 
   Plus, 
@@ -15,22 +15,33 @@ import {
   RotateCcw,
   Calendar
 } from 'lucide-react';
-import { mockUsers } from '../../data/mockUsers';
+import { useToast } from '../common/ToastContainer';
 import { User, UserRole } from '../../types/User';
+
+const API_BASE = 'https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev';
+const DEPARTMENTS_API = 'https://1qgedzknw2.execute-api.ap-southeast-1.amazonaws.com/prod/departmentsnew';
+const ROLES_API = 'https://2drqpw0tig.execute-api.ap-southeast-1.amazonaws.com/prod/roles';
 
 const UserManagement: React.FC = () => {
   const [searchParams] = useSearchParams();
   const highlightUserId = searchParams.get('highlight');
-  
-  const [users, setUsers] = useState(mockUsers);
+  const navigate = useNavigate();
+  const { showToast } = useToast();
+
+  const [users, setUsers] = useState<User[]>([]);
   const [isAddingNew, setIsAddingNew] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const [departments, setDepartments] = useState<Array<{ id: string; departmentName: string }>>([]);
+  const [rolesFromApi, setRolesFromApi] = useState<Array<{ roleId: string; roleName: string }>>([]);
+
   const [formData, setFormData] = useState<Partial<User>>({
     name: '',
     email: '',
     password: '',
-    role: 'clerk',
+    role: 'clerk' as any,
     department: '',
     phoneNumber: ''
   });
@@ -47,73 +58,161 @@ const UserManagement: React.FC = () => {
     { value: 'clerk', label: 'Clerk' }
   ];
 
+  useEffect(() => {
+    fetchUsers();
+    fetchDepartments();
+    fetchRoles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const fetchUsers = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/officer`);
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.officers)) {
+        const mapped: User[] = data.officers.map((o: any) => ({
+          id: o.id,
+          name: o.name,
+          email: o.email,
+          password: o.password,
+          role: (o.role || '').toString() as any,
+          department: o.department,
+          phoneNumber: o.phone || o.phoneNumber || ''
+        }));
+        setUsers(mapped);
+      } else {
+        showToast?.({ type: 'error', title: 'Load Failed', message: 'Unable to load users.' });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast?.({ type: 'error', title: 'Network Error', message: 'Failed to fetch users.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchDepartments = async () => {
+    try {
+      const res = await fetch(DEPARTMENTS_API);
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setDepartments(data.map((d: any) => ({ id: d.id, departmentName: d.departmentName })));
+      } else {
+        showToast?.({ type: 'error', title: 'Departments', message: 'Failed to load departments.' });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast?.({ type: 'error', title: 'Network Error', message: 'Failed to fetch departments.' });
+    }
+  };
+
+  const fetchRoles = async () => {
+    try {
+      const res = await fetch(ROLES_API);
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.roles)) {
+        setRolesFromApi(data.roles.map((r: any) => ({ roleId: r.roleId, roleName: r.roleName })));
+      } else {
+        // roles are optional — it's ok to continue without them
+        console.warn('Roles API returned unexpected shape', data);
+      }
+    } catch (err) {
+      console.error(err);
+      // not critical — continue
+    }
+  };
+
   const handleAdd = () => {
-    setIsAddingNew(true);
-    setEditingId(null);
-    setFormData({
-      name: '',
-      email: '',
-      password: '',
-      role: 'clerk',
-      department: '',
-      phoneNumber: ''
-    });
+    // consistent with ManageOfficers: redirect to dedicated create page
+    window.location.href = '/co-officer-dashboard/create-officer';
   };
 
-  const handleEdit = (user: User) => {
-    setEditingId(user.id);
-    setIsAddingNew(false);
-    setFormData({
-      ...user,
-      password: '' // Don't show existing password
-    });
+  const handleEdit = async (user: User) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/officer/${user.id}`);
+      const data = await res.json();
+      if (data && data.success && data.officer) {
+        const o = data.officer;
+        setEditingId(o.id);
+        setIsAddingNew(false);
+        setFormData({
+          id: o.id,
+          name: o.name,
+          email: o.email,
+          password: '',
+          role: (o.role || 'clerk') as any,
+          department: o.department,
+          phoneNumber: o.phone || ''
+        });
+      } else {
+        showToast?.({ type: 'error', title: 'Load Failed', message: 'Unable to load user details.' });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast?.({ type: 'error', title: 'Network Error', message: 'Failed to fetch user.' });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!formData.name || !formData.email || !formData.role || !formData.department || !formData.phoneNumber) {
-      alert('Please fill in all required fields');
+      showToast?.({ type: 'error', title: 'Validation Error', message: 'Please fill in all required fields.' });
       return;
     }
 
-    if (isAddingNew && !formData.password) {
-      alert('Password is required for new users');
-      return;
-    }
-
-    // Check for duplicate email
-    const existingUser = users.find(u => 
-      u.email.toLowerCase() === formData.email!.toLowerCase() && 
-      u.id !== editingId
-    );
+    const existingUser = users.find(u => u.email.toLowerCase() === formData.email!.toLowerCase() && u.id !== editingId);
     if (existingUser) {
-      alert('Email already exists');
+      showToast?.({ type: 'error', title: 'Validation Error', message: 'Email already exists.' });
       return;
     }
 
-    if (isAddingNew) {
-      const newUser: User = {
-        id: (users.length + 1).toString(),
-        name: formData.name!,
-        email: formData.email!,
-        password: formData.password!,
-        role: formData.role!,
-        department: formData.department!,
-        phoneNumber: formData.phoneNumber!
-      };
-      setUsers([...users, newUser]);
-    } else if (editingId) {
-      setUsers(users.map(user => 
-        user.id === editingId 
-          ? { 
-              ...user, 
-              ...formData,
-              password: formData.password || user.password // Keep existing password if not changed
-            } as User
-          : user
-      ));
+    // For creation, redirect to dedicated page (same as other component)
+    if (!editingId) {
+      window.location.href = '/co-officer-dashboard/create-officer';
+      return;
     }
 
-    handleCancel();
+    setLoading(true);
+    try {
+      const payload: any = {
+        name: formData.name,
+        email: formData.email,
+        department: formData.department,
+        role: formData.role,
+        phone: formData.phoneNumber,
+        ...(formData.password ? { password: formData.password } : {})
+      };
+
+      const res = await fetch(`${API_BASE}/officer/${editingId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        setUsers(prev => prev.map(u => u.id === editingId ? ({
+          ...(u as User),
+          name: formData.name!,
+          email: formData.email!,
+          department: formData.department!,
+          role: formData.role!,
+          phoneNumber: formData.phoneNumber!,
+          password: formData.password ? formData.password : u.password
+        }) : u));
+        showToast?.({ type: 'success', title: 'User Updated', message: 'User details updated.' });
+        handleCancel();
+      } else {
+        showToast?.({ type: 'error', title: 'Update Failed', message: 'Unable to update user.' });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast?.({ type: 'error', title: 'Network Error', message: 'Failed to update user.' });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleCancel = () => {
@@ -123,30 +222,63 @@ const UserManagement: React.FC = () => {
       name: '',
       email: '',
       password: '',
-      role: 'clerk',
+      role: 'clerk' as any,
       department: '',
       phoneNumber: ''
     });
     setShowPassword(false);
   };
 
-  const handleDelete = (userId: string) => {
-    if (window.confirm('Are you sure you want to delete this user?')) {
-      setUsers(users.filter(user => user.id !== userId));
+  const handleDelete = async (userId: string) => {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+    if (!window.confirm(`Are you sure you want to delete ${user.name}?`)) return;
+
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/officer/${userId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data && data.success) {
+        setUsers(prev => prev.filter(u => u.id !== userId));
+        showToast?.({ type: 'success', title: 'User Deleted', message: `${user.name} removed.` });
+      } else {
+        showToast?.({ type: 'error', title: 'Delete Failed', message: 'Unable to delete user.' });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast?.({ type: 'error', title: 'Network Error', message: 'Failed to delete user.' });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleResetPassword = (userId: string) => {
+  const handleResetPassword = async (userId: string) => {
     const newPassword = prompt('Enter new password for this user:');
-    if (newPassword && newPassword.length >= 6) {
-      setUsers(users.map(user => 
-        user.id === userId 
-          ? { ...user, password: newPassword }
-          : user
-      ));
-      alert('Password reset successfully');
-    } else if (newPassword) {
-      alert('Password must be at least 6 characters long');
+    if (!newPassword) return;
+    if (newPassword.length < 6) {
+      showToast?.({ type: 'error', title: 'Invalid Password', message: 'Password must be at least 6 characters long.' });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/officer/${userId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: newPassword })
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        setUsers(prev => prev.map(u => u.id === userId ? ({ ...u, password: newPassword }) : u));
+        showToast?.({ type: 'success', title: 'Password Reset', message: 'Password has been reset.' });
+      } else {
+        showToast?.({ type: 'error', title: 'Reset Failed', message: 'Unable to reset password.' });
+      }
+    } catch (err) {
+      console.error(err);
+      showToast?.({ type: 'error', title: 'Network Error', message: 'Failed to reset password.' });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -199,9 +331,7 @@ const UserManagement: React.FC = () => {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Full Name *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
               <input
                 type="text"
                 value={formData.name || ''}
@@ -211,9 +341,7 @@ const UserManagement: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Email Address *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email Address *</label>
               <input
                 type="email"
                 value={formData.email || ''}
@@ -223,9 +351,7 @@ const UserManagement: React.FC = () => {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Password {isAddingNew ? '*' : '(leave blank to keep current)'}
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Password {isAddingNew ? '*' : '(leave blank to keep current)'}</label>
               <div className="relative">
                 <input
                   type={showPassword ? 'text' : 'password'}
@@ -234,51 +360,38 @@ const UserManagement: React.FC = () => {
                   className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   placeholder={isAddingNew ? "Enter password" : "Enter new password"}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-4 w-4 text-gray-400" />
-                  ) : (
-                    <Eye className="h-4 w-4 text-gray-400" />
-                  )}
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 pr-3 flex items-center">
+                  {showPassword ? (<EyeOff className="h-4 w-4 text-gray-400" />) : (<Eye className="h-4 w-4 text-gray-400" />)}
                 </button>
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Role *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Role *</label>
               <select
-                value={formData.role || 'clerk'}
+                value={(formData.role as string) || 'clerk'}
                 onChange={(e) => setFormData(prev => ({ ...prev, role: e.target.value as UserRole }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 {roleOptions.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
+                  <option key={option.value} value={option.value}>{option.label}</option>
                 ))}
+                {/* fallback roles from API (if provided) */}
+                {rolesFromApi.map(r => <option key={r.roleId} value={r.roleName}>{r.roleName}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Department *
-              </label>
-              <input
-                type="text"
+              <label className="block text-sm font-medium text-gray-700 mb-1">Department *</label>
+              <select
                 value={formData.department || ''}
                 onChange={(e) => setFormData(prev => ({ ...prev, department: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Enter department name"
-              />
+              >
+                <option value="">Select department</option>
+                {departments.map(d => <option key={d.id} value={d.departmentName}>{d.departmentName}</option>)}
+              </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Phone Number *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number *</label>
               <input
                 type="tel"
                 value={formData.phoneNumber || ''}
@@ -289,19 +402,11 @@ const UserManagement: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center space-x-3 mt-6">
-            <button
-              onClick={handleSave}
-              className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
-            >
-              <Save className="h-4 w-4 mr-2" />
-              Save
+            <button onClick={handleSave} className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors">
+              <Save className="h-4 w-4 mr-2" />Save
             </button>
-            <button
-              onClick={handleCancel}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              <X className="h-4 w-4 mr-2" />
-              Cancel
+            <button onClick={handleCancel} className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+              <X className="h-4 w-4 mr-2" />Cancel
             </button>
           </div>
         </div>
@@ -310,45 +415,27 @@ const UserManagement: React.FC = () => {
       {/* Users Table */}
       <div className="bg-white rounded-xl shadow-sm overflow-hidden">
         <div className="p-6 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">
-            System Users ({users.length})
-          </h2>
+          <h2 className="text-lg font-semibold text-gray-900">System Users ({users.length})</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  User
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Role
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Department
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Contact
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Last Login
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Department</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Login</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {users.map((user) => (
-                <tr key={user.id} className={`hover:bg-gray-50 ${
-                  highlightUserId === user.id ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''
-                }`}>
+                <tr key={user.id} className={`hover:bg-gray-50 ${highlightUserId === user.id ? 'bg-yellow-50 border-l-4 border-yellow-400' : ''}`}>
                   <td className="px-6 py-4">
                     <div className="flex items-center space-x-3">
                       <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                        <span className="text-blue-600 font-medium text-sm">
-                          {user.name.split(' ').map(n => n[0]).join('')}
-                        </span>
+                        <span className="text-blue-600 font-medium text-sm">{user.name.split(' ').map(n => n[0]).join('')}</span>
                       </div>
                       <div>
                         <p className="text-sm font-medium text-gray-900">{user.name}</p>
@@ -357,8 +444,8 @@ const UserManagement: React.FC = () => {
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRoleColor(user.role)}`}>
-                      {getRoleLabel(user.role)}
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRoleColor(user.role as any)}`}>
+                      {getRoleLabel(user.role as any)}
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
@@ -383,33 +470,20 @@ const UserManagement: React.FC = () => {
                     <div className="flex items-center space-x-2">
                       <Calendar className="h-4 w-4 text-gray-400" />
                       <span className="text-sm text-gray-500">
-                        {/* Mock last login data */}
                         {new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000).toLocaleDateString()}
                       </span>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => handleEdit(user)}
-                        className="inline-flex items-center px-3 py-1 border border-blue-300 rounded-lg text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors"
-                      >
-                        <Edit className="h-3 w-3 mr-1" />
-                        Edit
+                      <button onClick={() => handleEdit(user)} className="inline-flex items-center px-3 py-1 border border-blue-300 rounded-lg text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors">
+                        <Edit className="h-3 w-3 mr-1" />Edit
                       </button>
-                      <button
-                        onClick={() => handleResetPassword(user.id)}
-                        className="inline-flex items-center px-3 py-1 border border-yellow-300 rounded-lg text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 transition-colors"
-                      >
-                        <RotateCcw className="h-3 w-3 mr-1" />
-                        Reset
+                      <button onClick={() => handleResetPassword(user.id)} className="inline-flex items-center px-3 py-1 border border-yellow-300 rounded-lg text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 transition-colors">
+                        <RotateCcw className="h-3 w-3 mr-1" />Reset
                       </button>
-                      <button
-                        onClick={() => handleDelete(user.id)}
-                        className="inline-flex items-center px-3 py-1 border border-red-300 rounded-lg text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 transition-colors"
-                      >
-                        <Trash2 className="h-3 w-3 mr-1" />
-                        Delete
+                      <button onClick={() => handleDelete(user.id)} className="inline-flex items-center px-3 py-1 border border-red-300 rounded-lg text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 transition-colors">
+                        <Trash2 className="h-3 w-3 mr-1" />Delete
                       </button>
                     </div>
                   </td>
@@ -419,7 +493,7 @@ const UserManagement: React.FC = () => {
           </table>
         </div>
 
-        {users.length === 0 && (
+        {users.length === 0 && !loading && (
           <div className="text-center py-12">
             <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No users found</h3>
