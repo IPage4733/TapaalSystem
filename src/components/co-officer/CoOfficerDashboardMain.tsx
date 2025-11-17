@@ -1,36 +1,156 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Users, 
-  FileText, 
-  Building, 
+import {
+  Users,
+  FileText,
+  Building,
   BarChart3,
   UserPlus,
-  Settings,
-  ArrowRight,
-  Shield,
+  ScrollText,
+  Plus,
   Award,
   TrendingUp,
   AlertTriangle,
   CheckCircle,
-  ScrollText,
-  Plus
+  ArrowRight,
+  Shield
 } from 'lucide-react';
-import { mockUsers } from '../../data/mockUsers';
-import { mockTappals, mockDepartments } from '../../data/mockTappals';
 import { isOverdue } from '../../utils/dateUtils';
+
+// API endpoints (provided)
+const TAPPAL_API = 'https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals';
+const OFFICER_API = 'https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer';
+const DEPARTMENTS_API = 'https://1qgedzknw2.execute-api.ap-southeast-1.amazonaws.com/prod/departmentsnew';
+
+// Basic types (adjust as needed)
+type Tappal = {
+  tappalId?: string;
+  subject?: string;
+  description?: string;
+  assignedTo?: string;
+  assignedToName?: string;
+  department?: string;
+  departmentName?: string;
+  priority?: string;
+  status?: string;
+  createdAt?: string;
+  expiryDate?: string; // ISO date or yyyy-mm-dd
+  petitionId?: string;
+  isConfidential?: boolean;
+  comments?: any[];
+  attachments?: string[];
+};
+
+type Officer = {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  department?: string;
+  role?: string;
+};
+
+type Department = {
+  id: string;
+  departmentName: string;
+  departmentCode?: string;
+  district?: string;
+  state?: string;
+};
 
 const CoOfficerDashboardMain: React.FC = () => {
   const navigate = useNavigate();
 
+  const [tappals, setTappals] = useState<Tappal[]>([]);
+  const [officers, setOfficers] = useState<Officer[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const controller = new AbortController();
+
+    async function fetchAll() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        // Fetch all endpoints in parallel
+        const [tResp, oResp, dResp] = await Promise.all([
+          fetch(TAPPAL_API, { signal: controller.signal }),
+          fetch(OFFICER_API, { signal: controller.signal }),
+          fetch(DEPARTMENTS_API, { signal: controller.signal })
+        ]);
+
+        if (!tResp.ok) throw new Error(`Tappal API error: ${tResp.status}`);
+        if (!oResp.ok) throw new Error(`Officer API error: ${oResp.status}`);
+        if (!dResp.ok) throw new Error(`Departments API error: ${dResp.status}`);
+
+        const tData = await tResp.json();
+        const oData = await oResp.json();
+        const dData = await dResp.json();
+
+        // TAPPAL API - many APIs return array directly. If your API wraps it, adapt here.
+        const tappalList: Tappal[] = Array.isArray(tData) ? tData : (tData.items || tData.tappals || []);
+
+        // OFFICER API - sample payload shows { success, count, officers }
+        const officerList: Officer[] = Array.isArray(oData)
+          ? oData
+          : (oData.officers || []);
+
+        // DEPARTMENTS API returns array in provided sample
+        const departmentList: Department[] = Array.isArray(dData) ? dData : (dData.departments || []);
+
+        if (mounted) {
+          setTappals(tappalList as Tappal[]);
+          setOfficers(
+            (officerList as Officer[]).map((o: any) => ({
+              id: o.id || o.employeeId || o.empId || o.ID || o.employee || '',
+              name: o.name || o.employeeName || o.fullName || '',
+              email: o.email,
+              phone: o.phone,
+              department: o.department,
+              role: o.role
+            }))
+          );
+          setDepartments(
+            (departmentList as Department[]).map((d: any) => ({
+              id: d.id,
+              departmentName: d.departmentName || d.name || d.department || '',
+              departmentCode: d.departmentCode,
+              district: d.district,
+              state: d.state
+            }))
+          );
+          setLoading(false);
+        }
+      } catch (err: any) {
+        if (mounted) {
+          if (err.name === 'AbortError') return;
+          setError(err.message || 'Failed to load data');
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchAll();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+  }, []);
+
   // Calculate system-wide stats
   const systemStats = useMemo(() => {
-    const totalOfficers = mockUsers.filter(u => u.role !== 'co_officer').length;
-    const totalTappals = mockTappals.length;
-    const totalDepartments = mockDepartments.length;
-    const overdueTappals = mockTappals.filter(t => isOverdue(t.expiryDate, t.status)).length;
-    const completedTappals = mockTappals.filter(t => t.status === 'Completed').length;
-    const pendingTappals = mockTappals.filter(t => t.status === 'Pending').length;
+    const totalOfficers = officers.length;
+    const totalTappals = tappals.length;
+    const totalDepartments = departments.length;
+    const overdueTappals = tappals.filter(t => isOverdue(t.expiryDate || '', t.status || '')).length;
+    const completedTappals = tappals.filter(t => (t.status || '').toLowerCase() === 'completed').length;
+    const pendingTappals = tappals.filter(t => (t.status || '').toLowerCase() === 'pending').length;
 
     return {
       totalOfficers,
@@ -41,20 +161,21 @@ const CoOfficerDashboardMain: React.FC = () => {
       pendingTappals,
       completionRate: totalTappals > 0 ? Math.round((completedTappals / totalTappals) * 100) : 0
     };
-  }, []);
+  }, [tappals, officers, departments]);
 
   // Get role distribution
   const roleDistribution = useMemo(() => {
-    const roles = mockUsers.filter(u => u.role !== 'co_officer').reduce((acc, user) => {
-      acc[user.role] = (acc[user.role] || 0) + 1;
+    const roles = officers.reduce((acc: Record<string, number>, user) => {
+      const roleKey = (user.role || 'Unknown').toString();
+      acc[roleKey] = (acc[roleKey] || 0) + 1;
       return acc;
-    }, {} as Record<string, number>);
+    }, {});
 
     return Object.entries(roles).map(([role, count]) => ({
       role: role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()),
       count
     }));
-  }, []);
+  }, [officers]);
 
   const quickActions = [
     {
@@ -117,6 +238,25 @@ const CoOfficerDashboardMain: React.FC = () => {
       color: 'teal'
     }
   ];
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <div className="bg-white rounded-xl shadow-sm p-6 text-center">Loading dashboard data…</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-6">
+          <h3 className="text-lg font-semibold text-red-700">Failed to load data</h3>
+          <p className="text-sm text-red-600 mt-2">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -216,7 +356,7 @@ const CoOfficerDashboardMain: React.FC = () => {
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
           <div className="space-y-3">
             {quickActions.map((action) => {
-              const Icon = action.icon;
+              const Icon = action.icon as any;
               return (
                 <button
                   key={action.path}
@@ -229,13 +369,13 @@ const CoOfficerDashboardMain: React.FC = () => {
                 >
                   <div className="flex items-center space-x-3">
                     <div className={`p-2 rounded-lg ${
-                      action.primary 
-                        ? 'bg-purple-200 group-hover:bg-purple-300' 
+                      action.primary
+                        ? 'bg-purple-200 group-hover:bg-purple-300'
                         : `bg-${action.color}-100 group-hover:bg-${action.color}-200`
                     } transition-colors`}>
                       <Icon className={`h-5 w-5 ${
-                        action.primary 
-                          ? 'text-purple-700' 
+                        action.primary
+                          ? 'text-purple-700'
                           : `text-${action.color}-600`
                       }`} />
                     </div>
@@ -267,7 +407,7 @@ const CoOfficerDashboardMain: React.FC = () => {
               <ArrowRight className="h-4 w-4" />
             </button>
           </div>
-          
+
           <div className="space-y-3">
             {roleDistribution.map((role, index) => (
               <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
