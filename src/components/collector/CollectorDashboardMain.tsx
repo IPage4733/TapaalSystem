@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../common/ToastContainer';
 import { 
@@ -17,86 +17,155 @@ import { mockTappals, mockDepartments } from '../../data/mockTappals';
 import { mockUsers } from '../../data/mockUsers';
 import { formatDate, isOverdue, getStatusColor } from '../../utils/dateUtils';
 
+const TAPPALS_API = "https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals";
+const API_KEY = ""; // optional: set if your API Gateway requires x-api-key
+
 const CollectorDashboardMain: React.FC = () => {
   const navigate = useNavigate();
   const { showToast } = useToast();
 
-  // Calculate stats
-  const totalTappals = mockTappals.length;
-  const overdueTappals = mockTappals.filter(t => isOverdue(t.expiryDate, t.status)).length;
-  const totalEmployees = mockUsers.length;
-  const totalDepartments = mockDepartments.length;
-  const completedTappals = mockTappals.filter(t => t.status === 'Completed').length;
-  const pendingTappals = mockTappals.filter(t => t.status === 'Pending').length;
+  // data state (start with mocks while loading)
+  const [tappals, setTappals] = useState(mockTappals);
+  const [loading, setLoading] = useState(true);
 
-  // Get recent tappals (latest 5)
-  const recentTappals = [...mockTappals]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 5);
+  // ---- small helpers for visuals ----
+  const statusClass = (status?: string) => {
+    if (!status) return 'bg-gray-100 text-gray-700';
+    const s = String(status).toLowerCase();
+
+    if (s.includes('forward')) return 'bg-gray-100 text-gray-700';      // FORWARDED / neutral
+    if (s.includes('active'))   return 'bg-blue-100 text-blue-600';     // Active / In Progress
+    if (s.includes('progress')) return 'bg-blue-100 text-blue-600';
+    if (s.includes('review'))   return 'bg-yellow-100 text-yellow-600'; // Under Review
+    if (s.includes('completed'))return 'bg-green-100 text-green-600';   // Completed
+    if (s.includes('pending'))  return 'bg-gray-100 text-gray-700';     // Pending (neutral)
+    if (s.includes('rejected')) return 'bg-red-100 text-red-600';       // Rejected
+    if (s.includes('urgent'))   return 'bg-red-100 text-red-600';       // Urgent
+    return 'bg-gray-100 text-gray-700';
+  };
+
+  const colorBgClass = (color?: string) => {
+    switch (color) {
+      case 'blue':   return { bg: 'bg-blue-100', icon: 'text-blue-600', hoverBg: 'group-hover:bg-blue-200' };
+      case 'purple': return { bg: 'bg-purple-100', icon: 'text-purple-600', hoverBg: 'group-hover:bg-purple-200' };
+      case 'green':  return { bg: 'bg-green-100', icon: 'text-green-600', hoverBg: 'group-hover:bg-green-200' };
+      case 'orange': return { bg: 'bg-orange-100', icon: 'text-orange-600', hoverBg: 'group-hover:bg-orange-200' };
+      case 'red':    return { bg: 'bg-red-100', icon: 'text-red-600', hoverBg: 'group-hover:bg-red-200' };
+      case 'teal':   return { bg: 'bg-teal-100', icon: 'text-teal-600', hoverBg: 'group-hover:bg-teal-200' };
+      case 'pink':   return { bg: 'bg-pink-100', icon: 'text-pink-600', hoverBg: 'group-hover:bg-pink-200' };
+      case 'indigo': return { bg: 'bg-indigo-100', icon: 'text-indigo-600', hoverBg: 'group-hover:bg-indigo-200' };
+      default:       return { bg: 'bg-gray-100', icon: 'text-gray-700', hoverBg: 'group-hover:bg-gray-200' };
+    }
+  };
+  // ------------------------------------
+
+  // fetch tappals (only this API)
+  useEffect(() => {
+    const controller = new AbortController();
+    let mounted = true;
+
+    const doFetch = async (url: string, opts: any = {}) => {
+      const { signal, ...rest } = opts;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(rest.headers || {}) };
+      if (API_KEY) headers['x-api-key'] = API_KEY;
+      try {
+        const token = localStorage.getItem('auth_token');
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+      } catch (e) { /* ignore */ }
+
+      const res = await fetch(url, { ...rest, headers, signal });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        const err: any = new Error(`HTTP ${res.status}: ${text}`);
+        err.status = res.status;
+        throw err;
+      }
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) return res.json();
+      return res.text();
+    };
+
+    const load = async () => {
+      setLoading(true);
+      try {
+        const resp = await doFetch(TAPPALS_API, { method: 'GET', signal: controller.signal });
+        const items = resp?.data ?? (Array.isArray(resp) ? resp : []);
+        if (mounted && Array.isArray(items) && items.length > 0) {
+          setTappals(items);
+        } else if (mounted && Array.isArray(items) && items.length === 0) {
+          console.warn('Tappals API returned empty array — using mock data as fallback.');
+        } else if (mounted) {
+          console.warn('Tappals API returned unexpected shape — using mock data as fallback.', resp);
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Failed to load tappals', err);
+          showToast && showToast('Failed to load tappals', { type: 'error' });
+        }
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    load();
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Derived stats (from tappals only)
+  const totalTappals = tappals.length;
+  const overdueTappals = tappals.filter(t => isOverdue(t.expiryDate, t.status)).length;
+
+  const totalEmployees = useMemo(() => {
+    const setNames = new Set<string>();
+    tappals.forEach(t => {
+      const name = (t.assignedToName ?? t.assignedTo ?? '').toString().trim();
+      if (name) setNames.add(name);
+    });
+    return setNames.size;
+  }, [tappals]);
+
+  const totalDepartments = useMemo(() => {
+    const setDepts = new Set<string>();
+    tappals.forEach(t => {
+      const dept = (t.departmentName && String(t.departmentName).trim())
+        ? t.departmentName
+        : (typeof t.department === 'string' ? t.department : (t.department?.name ?? '').toString());
+      if (dept) setDepts.add(dept);
+    });
+    return setDepts.size;
+  }, [tappals]);
+
+  const completedTappals = tappals.filter(t => (t.status ?? '').toString().toLowerCase() === 'completed').length;
+  const pendingTappals = tappals.filter(t => (t.status ?? '').toString().toLowerCase() === 'pending').length;
+
+  const recentTappals = useMemo(() => {
+    return [...tappals]
+      .sort((a, b) => new Date(b.createdAt || b.lastUpdated || 0).getTime() - new Date(a.createdAt || a.lastUpdated || 0).getTime())
+      .slice(0, 5);
+  }, [tappals]);
 
   const quickLinks = [
-    {
-      title: 'Track Petitions',
-      description: 'Monitor citizen petitions',
-      icon: FileText,
-      path: '/collector-dashboard/petitions',
-      color: 'blue'
-    },
-    {
-      title: 'All Tappals',
-      description: 'View generated tappals',
-      icon: FileText,
-      path: '/collector-dashboard/tappals',
-      color: 'purple'
-    },
-    {
-      title: 'Global Search',
-      description: 'Search across all records',
-      icon: FileText,
-      path: '/collector-dashboard/search',
-      color: 'indigo'
-    },
-    {
-      title: 'Department Analytics',
-      description: 'Department-wise performance',
-      icon: TrendingUp,
-      path: '/collector-dashboard/department-analytics',
-      color: 'green'
-    },
-    {
-      title: 'Employee Performance',
-      description: 'Track employee metrics',
-      icon: Users,
-      path: '/collector-dashboard/employee-performance',
-      color: 'orange'
-    },
-    {
-      title: 'Overdue Tappals',
-      description: 'Manage overdue items',
-      icon: Clock,
-      path: '/collector-dashboard/overdue',
-      color: 'red'
-    },
-    {
-      title: 'Manage Departments',
-      description: 'Department administration',
-      icon: Building,
-      path: '/collector-dashboard/departments',
-      color: 'teal'
-    },
-    {
-      title: 'User Management',
-      description: 'Manage system users',
-      icon: Users,
-      path: '/collector-dashboard/users',
-      color: 'pink'
-    }
+    { title: 'Track Petitions', description: 'Monitor citizen petitions', path: '/collector-dashboard/petitions', icon: FileText, color: 'blue' },
+    { title: 'All Tappals', description: 'View generated tappals', path: '/collector-dashboard/tappals', icon: FileText, color: 'purple' },
+    { title: 'Global Search', description: 'Search across all records', path: '/collector-dashboard/search', icon: FileText, color: 'indigo' },
+    { title: 'Department Analytics', description: 'Department-wise performance', path: '/collector-dashboard/department-analytics', icon: TrendingUp, color: 'green' },
+    { title: 'Employee Performance', description: 'Track employee metrics', path: '/collector-dashboard/employee-performance', icon: Users, color: 'orange' },
+    { title: 'Overdue Tappals', description: 'Manage overdue items', path: '/collector-dashboard/overdue', icon: Clock, color: 'red' },
+    { title: 'Manage Departments', description: 'Department administration', path: '/collector-dashboard/departments', icon: Building, color: 'teal' },
+    { title: 'User Management', description: 'Manage system users', path: '/collector-dashboard/users', icon: Users, color: 'pink' }
   ];
 
-  const handleTappalClick = (tappalId: string) => {
+  const handleTappalClick = (tappalId?: string) => {
+    if (!tappalId) return;
     navigate(`/tappal/${tappalId}`);
   };
 
+  // UI identical to your original markup, with statusClass & colored icons applied
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -234,9 +303,9 @@ const CollectorDashboardMain: React.FC = () => {
           <div className="space-y-3">
             {recentTappals.map((tappal) => (
               <div
-                key={tappal.id}
+                key={tappal.tappalId ?? tappal.id ?? tappal._id}
                 className="p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                onClick={() => handleTappalClick(tappal.tappalId)}
+                onClick={() => handleTappalClick(tappal.tappalId ?? tappal.id ?? tappal._id)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -245,7 +314,7 @@ const CollectorDashboardMain: React.FC = () => {
                     <div className="flex items-center space-x-4 mt-2">
                       <div className="flex items-center space-x-1">
                         <User className="h-3 w-3 text-gray-400" />
-                        <span className="text-xs text-gray-500">{tappal.assignedToName}</span>
+                        <span className="text-xs text-gray-500">{tappal.assignedToName || '-'}</span>
                       </div>
                       <div className="flex items-center space-x-1">
                         <Calendar className="h-3 w-3 text-gray-400" />
@@ -253,7 +322,7 @@ const CollectorDashboardMain: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(tappal.status)}`}>
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusClass(tappal.status)}`}>
                     {tappal.status}
                   </span>
                 </div>
@@ -268,14 +337,15 @@ const CollectorDashboardMain: React.FC = () => {
           <div className="grid grid-cols-2 gap-3">
             {quickLinks.map((link) => {
               const Icon = link.icon;
+              const c = colorBgClass(link.color);
               return (
                 <button
                   key={link.path}
                   onClick={() => navigate(link.path)}
-                  className={`p-4 rounded-lg border border-gray-200 hover:border-${link.color}-300 hover:bg-${link.color}-50 transition-colors text-left group`}
+                  className={`p-4 rounded-lg border border-gray-200 hover:border-gray-300 transition-colors text-left group`}
                 >
-                  <div className={`p-2 bg-${link.color}-100 rounded-lg w-fit mb-2 group-hover:bg-${link.color}-200 transition-colors`}>
-                    <Icon className={`h-5 w-5 text-${link.color}-600`} />
+                  <div className={`p-2 ${c.bg} rounded-lg w-fit mb-2 ${c.hoverBg} transition-colors`}>
+                    <Icon className={`h-5 w-5 ${c.icon}`} />
                   </div>
                   <h3 className="font-medium text-gray-900 text-sm">{link.title}</h3>
                   <p className="text-xs text-gray-500 mt-1">{link.description}</p>
