@@ -42,7 +42,7 @@ Co-Officer (System Admin)
 │   │   │   │   ├── Naib Tahsildar
 │   │   │   │   │   ├── Revenue Inspector (RI)
 │   │   │   │   │   │   └── Village Revenue Officer (VRO)
-│   │   │   │   │   └── Clerk
+│   │   │   │   │   └── Clerk  
 ```
 
 ### **Access Levels:**
