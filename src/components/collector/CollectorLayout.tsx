@@ -40,6 +40,7 @@ const CollectorLayout: React.FC = () => {
     { path: '/collector-dashboard/department-analytics', icon: BarChart3, label: 'Department Analytics' },
     { path: '/collector-dashboard/employee-performance', icon: UserCheck, label: 'Employee Performance' },
     { path: '/collector-dashboard/overdue', icon: Clock, label: 'Overdue Tappals' },
+    { path: '/collector-dashboard/role', icon: Building, label: 'Manage Roles' },
     { path: '/collector-dashboard/departments', icon: Building, label: 'Manage Departments' },
     { path: '/collector-dashboard/users', icon: Users, label: 'User Management' }
   ];
