@@ -15,9 +15,10 @@ import {
 } from 'lucide-react';
 import { mockTappals, mockDepartments } from '../../data/mockTappals';
 import { mockUsers } from '../../data/mockUsers';
-import { formatDate, isOverdue, getStatusColor } from '../../utils/dateUtils';
+import { formatDate, isOverdue } from '../../utils/dateUtils';
 
 const TAPPALS_API = "https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals";
+const OFFICER_API = "https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer"; // new: employees source
 const API_KEY = ""; // optional: set if your API Gateway requires x-api-key
 
 const CollectorDashboardMain: React.FC = () => {
@@ -25,7 +26,8 @@ const CollectorDashboardMain: React.FC = () => {
   const { showToast } = useToast();
 
   // data state (start with mocks while loading)
-  const [tappals, setTappals] = useState(mockTappals);
+  const [tappals, setTappals] = useState<any[]>(mockTappals);
+  const [officersCount, setOfficersCount] = useState<number | null>(null); // <-- use this for Total Employees
   const [loading, setLoading] = useState(true);
 
   // ---- small helpers for visuals ----
@@ -59,55 +61,88 @@ const CollectorDashboardMain: React.FC = () => {
   };
   // ------------------------------------
 
-  // fetch tappals (only this API)
+  // helper fetch wrapper (handles optional auth and x-api-key)
+  const doFetch = async (url: string, opts: RequestInit = {}) => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(opts.headers as any || {}) };
+    if (API_KEY) headers['x-api-key'] = API_KEY;
+    try {
+      const token = localStorage.getItem('auth_token');
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    } catch (e) { /* ignore */ }
+
+    const res = await fetch(url, { ...opts, headers });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const err: any = new Error(`HTTP ${res.status}: ${text}`);
+      err.status = res.status;
+      throw err;
+    }
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) return res.json();
+    return res.text();
+  };
+
+  // fetch tappals AND officers count
   useEffect(() => {
     const controller = new AbortController();
     let mounted = true;
 
-    const doFetch = async (url: string, opts: any = {}) => {
-      const { signal, ...rest } = opts;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(rest.headers || {}) };
-      if (API_KEY) headers['x-api-key'] = API_KEY;
-      try {
-        const token = localStorage.getItem('auth_token');
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-      } catch (e) { /* ignore */ }
-
-      const res = await fetch(url, { ...rest, headers, signal });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        const err: any = new Error(`HTTP ${res.status}: ${text}`);
-        err.status = res.status;
-        throw err;
-      }
-      const ct = res.headers.get('content-type') || '';
-      if (ct.includes('application/json')) return res.json();
-      return res.text();
-    };
-
-    const load = async () => {
+    const loadAll = async () => {
       setLoading(true);
       try {
-        const resp = await doFetch(TAPPALS_API, { method: 'GET', signal: controller.signal });
-        const items = resp?.data ?? (Array.isArray(resp) ? resp : []);
-        if (mounted && Array.isArray(items) && items.length > 0) {
-          setTappals(items);
-        } else if (mounted && Array.isArray(items) && items.length === 0) {
-          console.warn('Tappals API returned empty array — using mock data as fallback.');
-        } else if (mounted) {
-          console.warn('Tappals API returned unexpected shape — using mock data as fallback.', resp);
+        // 1) tappals
+        try {
+          const resp = await doFetch(TAPPALS_API, { method: 'GET', signal: controller.signal } as any);
+          const items = resp?.data ?? (Array.isArray(resp) ? resp : []);
+          if (mounted && Array.isArray(items) && items.length > 0) {
+            setTappals(items);
+          } else if (mounted && Array.isArray(items) && items.length === 0) {
+            console.warn('Tappals API returned empty array — using mock data as fallback.');
+          } else if (mounted) {
+            console.warn('Tappals API returned unexpected shape — using mock data as fallback.', resp);
+          }
+        } catch (err: any) {
+          if (err.name !== 'AbortError') {
+            console.error('Failed to load tappals', err);
+            showToast && showToast('Failed to load tappals', { type: 'error' });
+          }
         }
-      } catch (err: any) {
-        if (err.name !== 'AbortError') {
-          console.error('Failed to load tappals', err);
-          showToast && showToast('Failed to load tappals', { type: 'error' });
+
+        // 2) officers count (this is the change you requested)
+        try {
+          const offResp = await doFetch(OFFICER_API, { method: 'GET', signal: controller.signal } as any);
+          // possible shapes:
+          // { success:true, count:9, officers: [...] }
+          // { officers: [...] }
+          // [ ... ] (array)
+          if (offResp && typeof offResp === 'object') {
+            if (typeof offResp.count === 'number') {
+              if (mounted) setOfficersCount(offResp.count);
+            } else if (Array.isArray(offResp.officers)) {
+              if (mounted) setOfficersCount(offResp.officers.length);
+            } else if (Array.isArray(offResp)) {
+              if (mounted) setOfficersCount(offResp.length);
+            } else {
+              // unexpected shape -> fallback to derive from tappals later
+              console.warn('Officer API returned unexpected shape, will fallback to derive employee count from tappals.', offResp);
+            }
+          } else if (Array.isArray(offResp)) {
+            if (mounted) setOfficersCount(offResp.length);
+          } else {
+            console.warn('Officer API returned non-json response, falling back to tappals derived count.');
+          }
+        } catch (err: any) {
+          if (err.name !== 'AbortError') {
+            console.warn('Failed to fetch officers — will derive employees from tappals.', err.message ?? err);
+          }
         }
+
       } finally {
         if (mounted) setLoading(false);
       }
     };
 
-    load();
+    loadAll();
 
     return () => {
       mounted = false;
@@ -120,14 +155,16 @@ const CollectorDashboardMain: React.FC = () => {
   const totalTappals = tappals.length;
   const overdueTappals = tappals.filter(t => isOverdue(t.expiryDate, t.status)).length;
 
+  // If officersCount was fetched use it, otherwise derive unique assignedToName from tappals
   const totalEmployees = useMemo(() => {
+    if (typeof officersCount === 'number') return officersCount;
     const setNames = new Set<string>();
     tappals.forEach(t => {
       const name = (t.assignedToName ?? t.assignedTo ?? '').toString().trim();
       if (name) setNames.add(name);
     });
     return setNames.size;
-  }, [tappals]);
+  }, [tappals, officersCount]);
 
   const totalDepartments = useMemo(() => {
     const setDepts = new Set<string>();
@@ -215,7 +252,7 @@ const CollectorDashboardMain: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Total Employees</p>
-              <p className="text-2xl font-bold text-gray-900">{totalEmployees}</p>
+              <p className="text-2xl font-bold text-gray-900">{officersCount !== null ? officersCount : totalEmployees}</p>
             </div>
             <div className="p-3 bg-green-100 rounded-full">
               <Users className="h-6 w-6 text-green-600" />
