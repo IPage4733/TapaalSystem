@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+// MyTappals.tsx
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../common/ToastContainer';
@@ -16,27 +17,102 @@ import {
   Paperclip,
   MessageSquare
 } from 'lucide-react';
-import { mockTappals } from '../../data/mockTappals';
 import { formatDate, getStatusColor, getPriorityColor, isOverdue, getDaysOverdue } from '../../utils/dateUtils';
+
+// Tappals API endpoint (your provided endpoint)
+const TAPPALS_API = 'https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals';
+
+// Uploaded image local path (kept as constant only — not rendered)
+const UPLOADED_IMAGE_PATH = '/mnt/data/c02b5c9d-e7db-4cc2-ace8-59df528728de.png';
+
+type TappalApiItem = {
+  id?: string;
+  tappalId: string;
+  subject?: string;
+  description?: string;
+  assignedTo?: string;
+  assignedToName?: string;
+  department?: string | null;
+  departmentName?: string;
+  priority?: string;
+  status?: string;
+  expiryDate?: string;
+  attachments?: string[];
+  createdAt?: string;
+};
 
 const MyTappals: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { showToast } = useToast();
+
+  const [allTappals, setAllTappals] = useState<TappalApiItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
   const [filters, setFilters] = useState({
     status: '',
     department: ''
   });
 
-  // Get tappals assigned to current Tahsildar
-  const myTappals = useMemo(() => {
-    return mockTappals.filter(t => t.assignedTo === user?.id);
-  }, [user]);
+  // Fetch tappals from API on mount
+  useEffect(() => {
+    let mounted = true;
+    const fetchTappals = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(TAPPALS_API);
+        if (!res.ok) throw new Error(`Tappals API error: ${res.status}`);
+        const data = await res.json();
+        const tappals: TappalApiItem[] = Array.isArray(data) ? data : [];
+        if (mounted) setAllTappals(tappals);
+      } catch (err: any) {
+        console.error(err);
+        if (mounted) setError(err.message || 'Failed to load tappals');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
 
+    fetchTappals();
+    return () => { mounted = false; };
+  }, []);
+
+  // myTappals: only tappals assigned to the logged-in user (Option B)
+  const myTappals = useMemo(() => {
+    if (!user?.id) return [];
+    return allTappals.filter(t => t.assignedTo === user.id);
+  }, [allTappals, user]);
+
+  // derive status options from myTappals
+  const statusOptions = useMemo(() => {
+    const s = new Set<string>();
+    myTappals.forEach(t => {
+      if (t.status) s.add(t.status);
+    });
+    // keep some common statuses in case myTappals is empty
+    ['Pending', 'In Progress', 'Under Review', 'Completed', 'Rejected', 'FORWARDED', 'Active'].forEach(x => s.add(x));
+    return Array.from(s);
+  }, [myTappals]);
+
+  // derive department list from myTappals (departmentName or department)
+  const departmentOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    myTappals.forEach(t => {
+      const id = (t.department || t.departmentName || '').trim();
+      const label = (t.departmentName || t.department || id).trim();
+      if (id) map.set(id, label || id);
+    });
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [myTappals]);
+
+  // filtered tappals based on filters
   const filteredTappals = useMemo(() => {
     return myTappals.filter(tappal => {
-      const matchesStatus = !filters.status || tappal.status === filters.status;
-      const matchesDepartment = !filters.department || tappal.departmentName.toLowerCase().includes(filters.department.toLowerCase());
+      const matchesStatus = !filters.status || (tappal.status || '').toLowerCase() === filters.status.toLowerCase();
+      const deptText = (tappal.departmentName || tappal.department || '').toLowerCase();
+      const matchesDepartment = !filters.department || deptText.includes(filters.department.toLowerCase());
       return matchesStatus && matchesDepartment;
     });
   }, [myTappals, filters]);
@@ -65,6 +141,7 @@ const MyTappals: React.FC = () => {
       message: `Opening ${fileName} in a new window.`,
       duration: 3000
     });
+    // if attachments are S3 URLs you could window.open(fileName) here
   };
 
   const handleAddAttachment = (tappalId: string) => {
@@ -85,7 +162,27 @@ const MyTappals: React.FC = () => {
     });
   };
 
-  const statusOptions = ['Pending', 'In Progress', 'Under Review', 'Completed', 'Rejected'];
+  const defaultStatusOptions = ['Pending', 'In Progress', 'Under Review', 'Completed', 'Rejected'];
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <p className="text-gray-600">Loading your tappals...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6">
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <p className="text-red-600">Error loading tappals: {error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -111,7 +208,7 @@ const MyTappals: React.FC = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Pending</p>
               <p className="text-2xl font-bold text-orange-600">
-                {myTappals.filter(t => t.status === 'Pending').length}
+                {myTappals.filter(t => (t.status || '').toLowerCase() === 'pending').length}
               </p>
             </div>
             <Calendar className="h-8 w-8 text-orange-600" />
@@ -122,7 +219,7 @@ const MyTappals: React.FC = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Completed</p>
               <p className="text-2xl font-bold text-green-600">
-                {myTappals.filter(t => t.status === 'Completed').length}
+                {myTappals.filter(t => (t.status || '').toLowerCase() === 'completed').length}
               </p>
             </div>
             <CheckCircle className="h-8 w-8 text-green-600" />
@@ -133,7 +230,7 @@ const MyTappals: React.FC = () => {
             <div>
               <p className="text-sm font-medium text-gray-600">Overdue</p>
               <p className="text-2xl font-bold text-red-600">
-                {myTappals.filter(t => isOverdue(t.expiryDate, t.status)).length}
+                {myTappals.filter(t => isOverdue(t.expiryDate || '', t.status || '')).length}
               </p>
             </div>
             <Calendar className="h-8 w-8 text-red-600" />
@@ -156,7 +253,7 @@ const MyTappals: React.FC = () => {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             >
               <option value="">All Status</option>
-              {statusOptions.map(status => (
+              {(statusOptions.length ? statusOptions : defaultStatusOptions).map(status => (
                 <option key={status} value={status}>{status}</option>
               ))}
             </select>
@@ -170,6 +267,11 @@ const MyTappals: React.FC = () => {
               onChange={(e) => setFilters(prev => ({ ...prev, department: e.target.value }))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
             />
+            {departmentOptions.length > 0 && (
+              <div className="mt-2 text-xs text-gray-500">
+                Departments: {departmentOptions.map(d => d.name).join(', ')}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -213,11 +315,11 @@ const MyTappals: React.FC = () => {
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredTappals.map((tappal) => {
-                const overdueStatus = isOverdue(tappal.expiryDate, tappal.status);
-                const daysOverdue = getDaysOverdue(tappal.expiryDate);
+                const overdueStatus = isOverdue(tappal.expiryDate || '', tappal.status || '');
+                const daysOverdue = getDaysOverdue(tappal.expiryDate || '');
 
                 return (
-                  <tr key={tappal.id} className="hover:bg-gray-50">
+                  <tr key={tappal.tappalId || tappal.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <button
                         onClick={() => handleTappalClick(tappal.tappalId)}
@@ -236,14 +338,14 @@ const MyTappals: React.FC = () => {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center space-x-2">
                         <Building className="h-4 w-4 text-gray-400" />
-                        <span className="text-sm text-gray-900">{tappal.departmentName}</span>
+                        <span className="text-sm text-gray-900">{tappal.departmentName || tappal.department || '-'}</span>
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center space-x-2">
                         <Calendar className="h-4 w-4 text-gray-400" />
                         <div>
-                          <span className="text-sm text-gray-900">{formatDate(tappal.expiryDate)}</span>
+                          <span className="text-sm text-gray-900">{formatDate(tappal.expiryDate || '')}</span>
                           {overdueStatus && (
                             <div className="text-xs text-red-600 font-medium">
                               {daysOverdue} days overdue
@@ -253,12 +355,12 @@ const MyTappals: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(tappal.status)}`}>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(tappal.status || '')}`}>
                         {tappal.status}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(tappal.priority)}`}>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(tappal.priority || '')}`}>
                         {tappal.priority}
                       </span>
                     </td>
