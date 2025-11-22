@@ -1,20 +1,21 @@
 // src/services/authService.ts
-const AUTH_TOKEN_KEY = 'auth_token';
+const ACCESS_TOKEN_KEY = 'access_token';
 const AUTH_USER_KEY = 'auth_user';
 
-export const getAuthToken = (): string | null => {
+export const getAccessToken = (): string | null => {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem(AUTH_TOKEN_KEY);
+  return localStorage.getItem(ACCESS_TOKEN_KEY);
 };
 
-export const setAuthToken = (token: string): void => {
+export const setAccessToken = (token: string | null): void => {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(AUTH_TOKEN_KEY, token);
+  if (token) localStorage.setItem(ACCESS_TOKEN_KEY, token);
+  else localStorage.removeItem(ACCESS_TOKEN_KEY);
 };
 
-export const removeAuthToken = (): void => {
+export const clearAccessToken = (): void => {
   if (typeof window === 'undefined') return;
-  localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
 };
 
 export const getStoredAuthUser = (): string | null => {
@@ -30,8 +31,4 @@ export const setStoredAuthUser = (userJson: string): void => {
 export const removeStoredAuthUser = (): void => {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(AUTH_USER_KEY);
-};
-
-export const isAuthenticated = (): boolean => {
-  return !!getAuthToken();
 };

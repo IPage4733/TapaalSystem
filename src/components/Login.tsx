@@ -1,30 +1,34 @@
-import React, { useState, useEffect } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { LoginCredentials, UserRole } from '../types/User';
-import { Eye, EyeOff, FileText, Shield, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
+import { useAuth } from "../context/AuthContext";
+import { LoginCredentials, UserRole } from "../types/User";
+import { Eye, EyeOff, FileText, Shield, AlertCircle } from "lucide-react";
 
 const roleRedirects: Record<UserRole, string> = {
-  co_officer: '/co-officer-dashboard',
-  collector: '/collector-dashboard',
-  joint_collector: '/joint-collector-dashboard',
-  dro: '/dro-dashboard',
-  rdo: '/rdo-dashboard',
-  tahsildar: '/tahsildar-dashboard',
-  naib_tahsildar: '/naib-dashboard',
-  ri: '/ri-dashboard',
-  vro: '/vro-dashboard',
-  clerk: '/clerk-dashboard'
+  co_officer: "/co-officer-dashboard",
+  collector: "/collector-dashboard",
+  joint_collector: "/joint-collector-dashboard",
+  dro: "/dro-dashboard",
+  rdo: "/rdo-dashboard",
+  tahsildar: "/tahsildar-dashboard",
+  naib_tahsildar: "/naib-dashboard",
+  ri: "/ri-dashboard",
+  vro: "/vro-dashboard",
+  clerk: "/clerk-dashboard",
 };
 
 const Login: React.FC = () => {
   const { user, login, isLoading } = useAuth();
   const navigate = useNavigate();
   const [credentials, setCredentials] = useState<LoginCredentials>({
-    email: '',
-    password: ''
+    email: "",
+    password: "",
   });
-  const [errors, setErrors] = useState<{ email?: string; password?: string; general?: string }>({});
+  const [errors, setErrors] = useState<{
+    email?: string;
+    password?: string;
+    general?: string;
+  }>({});
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -43,15 +47,15 @@ const Login: React.FC = () => {
     const newErrors: { email?: string; password?: string } = {};
 
     if (!credentials.email.trim()) {
-      newErrors.email = 'Email is required';
+      newErrors.email = "Email is required";
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(credentials.email)) {
-      newErrors.email = 'Please enter a valid email address';
+      newErrors.email = "Please enter a valid email address";
     }
 
     if (!credentials.password.trim()) {
-      newErrors.password = 'Password is required';
+      newErrors.password = "Password is required";
     } else if (credentials.password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
+      newErrors.password = "Password must be at least 6 characters";
     }
 
     setErrors(newErrors);
@@ -60,7 +64,7 @@ const Login: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (!validateForm()) {
       return;
     }
@@ -70,24 +74,23 @@ const Login: React.FC = () => {
 
     try {
       const result = await login(credentials);
-      
-      if (result.success && user) {
-        navigate(roleRedirects[user.role], { replace: true });
-      } else if (!result.success && result.error) {
-        setErrors({ general: result.error });
-      }
+if (result.success && result.user) {
+  navigate(roleRedirects[result.user.role], { replace: true });
+} else {
+  setErrors({ general: result.error || 'Login failed' });
+}
     } catch (error) {
-      setErrors({ general: 'An unexpected error occurred. Please try again.' });
+      setErrors({ general: "An unexpected error occurred. Please try again." });
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleInputChange = (field: keyof LoginCredentials, value: string) => {
-    setCredentials(prev => ({ ...prev, [field]: value }));
+    setCredentials((prev) => ({ ...prev, [field]: value }));
     // Clear field-specific error when user starts typing
     if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: undefined }));
+      setErrors((prev) => ({ ...prev, [field]: undefined }));
     }
   };
 
@@ -105,7 +108,9 @@ const Login: React.FC = () => {
               <p className="text-sm text-gray-600">File Tracking System</p>
             </div>
           </div>
-          <h2 className="text-3xl font-bold text-gray-900">Sign in to your account</h2>
+          <h2 className="text-3xl font-bold text-gray-900">
+            Sign in to your account
+          </h2>
           <p className="mt-2 text-sm text-gray-600">
             Enter your credentials to access the system
           </p>
@@ -119,7 +124,9 @@ const Login: React.FC = () => {
               <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start space-x-3">
                 <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
                 <div>
-                  <h3 className="text-sm font-medium text-red-800">Authentication Failed</h3>
+                  <h3 className="text-sm font-medium text-red-800">
+                    Authentication Failed
+                  </h3>
                   <p className="text-sm text-red-700 mt-1">{errors.general}</p>
                 </div>
               </div>
@@ -127,7 +134,10 @@ const Login: React.FC = () => {
 
             {/* Email Field */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-2">
+              <label
+                htmlFor="email"
+                className="block text-sm font-medium text-gray-700 mb-2"
+              >
                 Email Address
               </label>
               <input
@@ -136,9 +146,9 @@ const Login: React.FC = () => {
                 type="email"
                 autoComplete="email"
                 value={credentials.email}
-                onChange={(e) => handleInputChange('email', e.target.value)}
+                onChange={(e) => handleInputChange("email", e.target.value)}
                 className={`appearance-none rounded-lg relative block w-full px-4 py-3 border ${
-                  errors.email ? 'border-red-300' : 'border-gray-300'
+                  errors.email ? "border-red-300" : "border-gray-300"
                 } placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
                 placeholder="Enter your email address"
               />
@@ -149,19 +159,24 @@ const Login: React.FC = () => {
 
             {/* Password Field */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+              <label
+                htmlFor="password"
+                className="block text-sm font-medium text-gray-700 mb-2"
+              >
                 Password
               </label>
               <div className="relative">
                 <input
                   id="password"
                   name="password"
-                  type={showPassword ? 'text' : 'password'}
+                  type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
                   value={credentials.password}
-                  onChange={(e) => handleInputChange('password', e.target.value)}
+                  onChange={(e) =>
+                    handleInputChange("password", e.target.value)
+                  }
                   className={`appearance-none rounded-lg relative block w-full px-4 py-3 pr-12 border ${
-                    errors.password ? 'border-red-300' : 'border-gray-300'
+                    errors.password ? "border-red-300" : "border-gray-300"
                   } placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors`}
                   placeholder="Enter your password"
                 />
@@ -191,19 +206,31 @@ const Login: React.FC = () => {
               <span className="absolute left-0 inset-y-0 flex items-center pl-3">
                 <Shield className="h-5 w-5 text-blue-500 group-hover:text-blue-400" />
               </span>
-              {isSubmitting ? 'Signing in...' : 'Sign in'}
+              {isSubmitting ? "Signing in..." : "Sign in"}
             </button>
           </div>
         </form>
 
         {/* Demo Credentials */}
         <div className="bg-blue-50 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-blue-800 mb-2">Demo Credentials</h3>
+          <h3 className="text-sm font-medium text-blue-800 mb-2">
+            Demo Credentials
+          </h3>
           <div className="text-xs text-blue-700 space-y-1">
-            <p><strong>Co-Officer:</strong> co.officer@district.gov.in / co123</p>
-            <p><strong>Collector:</strong> collector@district.gov.in / collector123</p>
-            <p><strong>Clerk:</strong> clerk@district.gov.in / clerk123</p>
-            <p><strong>Tahsildar:</strong> tahsildar@district.gov.in / tahsildar123</p>
+            <p>
+              <strong>Co-Officer:</strong> co.officer@district.gov.in / co123
+            </p>
+            <p>
+              <strong>Collector:</strong> collector@district.gov.in /
+              collector123
+            </p>
+            <p>
+              <strong>Clerk:</strong> clerk@district.gov.in / clerk123
+            </p>
+            <p>
+              <strong>Tahsildar:</strong> tahsildar@district.gov.in /
+              tahsildar123
+            </p>
           </div>
         </div>
 
