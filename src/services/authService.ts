@@ -32,3 +32,6 @@ export const removeStoredAuthUser = (): void => {
   if (typeof window === 'undefined') return;
   localStorage.removeItem(AUTH_USER_KEY);
 };
+
+// Backwards-compatible aliases expected by other modules
+export { getAccessToken as getAuthToken, setAccessToken as setAuthToken, clearAccessToken as removeAuthToken };
