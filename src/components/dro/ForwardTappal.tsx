@@ -1,368 +1,357 @@
-import React, { useState, useMemo } from 'react';
-import { useAuth } from '../../context/AuthContext';
-import { useToast } from '../common/ToastContainer';
-import { useSearchParams } from 'react-router-dom';
-import { 
-  Send, 
-  FileText, 
-  User, 
-  Building, 
+import React, { useState, useEffect, useMemo } from "react";
+import axios from "axios";
+import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../common/ToastContainer";
+import { useSearchParams, useNavigate } from "react-router-dom";
+import {
+  Send,
+  FileText,
+  User,
+  Building,
   Calendar,
-  AlertTriangle
-} from 'lucide-react';
-import { mockTappals } from '../../data/mockTappals';
-import { mockUsers } from '../../data/mockUsers';
-import { formatDate, getStatusColor, getPriorityColor } from '../../utils/dateUtils';
+  AlertTriangle,
+} from "lucide-react";
+import {
+  formatDate,
+  getStatusColor,
+  getPriorityColor,
+} from "../../utils/dateUtils";
 
 const ForwardTappal: React.FC = () => {
   const { user } = useAuth();
   const { showToast } = useToast();
   const [searchParams] = useSearchParams();
-  const preSelectedTappal = searchParams.get('tappal');
+  const navigate = useNavigate();
 
-  const [selectedTappalId, setSelectedTappalId] = useState(preSelectedTappal || '');
-  const [selectedOfficerId, setSelectedOfficerId] = useState('');
-  const [reason, setReason] = useState('');
+  const preSelectedTappal = searchParams.get("tappal");
 
-  // Get tappals assigned to current DRO
-  const myTappals = useMemo(() => {
-    return mockTappals.filter(t => t.assignedTo === user?.id);
-  }, [user]);
+  const [tappals, setTappals] = useState<any[]>([]);
+  const [officers, setOfficers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Get officers below DRO (RDO, Tahsildar)
-  const officersBelow = useMemo(() => {
-    return mockUsers.filter(u => 
-      ['rdo', 'tahsildar'].includes(u.role)
-    );
+  const [selectedTappalId, setSelectedTappalId] = useState(preSelectedTappal || "");
+  const [selectedOfficerId, setSelectedOfficerId] = useState("");
+  const [reason, setReason] = useState("");
+
+  // =============================
+  // 🔥 FETCH TAPPLALS + OFFICERS
+  // =============================
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const tappalRes = await axios.get(
+          "https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals"
+        );
+
+        const officerRes = await axios.get(
+          "https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer"
+        );
+
+        setTappals(tappalRes.data || []);
+        setOfficers(officerRes.data.officers || []);
+      } catch (err) {
+        showToast({
+          type: "error",
+          title: "Error",
+          message: "Unable to load tappals or officers.",
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
   }, []);
 
-  const selectedTappal = useMemo(() => {
-    return myTappals.find(t => t.tappalId === selectedTappalId);
-  }, [myTappals, selectedTappalId]);
+  // =============================
+  // 🔥 FILTER TAPPLALS FOR CURRENT USER
+  // =============================
+  const myTappals = useMemo(() => {
+    return tappals.filter((t) => t.assignedTo === user?.id);
+  }, [tappals, user]);
 
-  const selectedOfficer = useMemo(() => {
-    return officersBelow.find(o => o.id === selectedOfficerId);
-  }, [officersBelow, selectedOfficerId]);
+  // =============================
+  // 🔥 FILTER OFFICERS BELOW CURRENT ROLE
+  // =============================
+  const officersBelow = useMemo(() => {
+    return officers.filter((o) => {
+      const role = o.role?.toLowerCase() || "";
+      return (
+        role.includes("tahsildar") ||
+        role.includes("tashildhar") ||
+        role.includes("rdo") ||
+        role.includes("inspector") ||
+        role.includes("revenue inspector") ||
+        role.includes("village revenue officer") ||
+        role.includes("vro")
+      );
+    });
+  }, [officers]);
 
-  const handleForward = () => {
+  const selectedTappal = myTappals.find((t) => t.tappalId === selectedTappalId);
+  const selectedOfficer = officersBelow.find((o) => o.id === selectedOfficerId);
+
+  // =============================
+  // ⭐ RESOLVE fromOfficerPhone
+  // =============================
+  const resolvedUserPhone = useMemo(() => {
+    if (user?.phone) return user.phone;
+
+    const match = officers.find((o) => o.id === user?.id);
+    return match?.phone || "0000000000";
+  }, [user, officers]);
+
+  // =============================
+  // 🔥 FORWARD TAPPLAL
+  // =============================
+  const handleForward = async () => {
     if (!selectedTappal || !selectedOfficer || !reason.trim()) {
       showToast({
-        type: 'error',
-        title: 'Validation Error',
-        message: 'Please select a tappal, officer, and provide a reason for forwarding.'
+        type: "error",
+        title: "Missing Fields",
+        message: "Select tappal, officer and reason.",
       });
       return;
     }
 
-    // In real implementation, this would:
-    // 1. Create new movement record
-    // 2. Update tappal's assignedTo
-    // 3. Send notification to new officer
+    try {
+      const url = `https://eppkpabk61.execute-api.ap-southeast-1.amazonaws.com/dev/tapal/${selectedTappal.tappalId}/forward`;
 
-    showToast({
-      type: 'success',
-      title: 'Tappal Forwarded Successfully',
-      message: `${selectedTappal.tappalId} has been forwarded to ${selectedOfficer.name} with the specified reason.`,
-      duration: 6000
-    });
+      const body = {
+        fromOfficerId: user.id,
+        fromOfficerName: user.name,
+        fromOfficerRole: user.role,
+        fromDepartment: user.department,
+        fromOfficerPhone: resolvedUserPhone,
 
-    // Reset form
-    setSelectedTappalId('');
-    setSelectedOfficerId('');
-    setReason('');
+        toOfficerId: selectedOfficer.id,
+        toOfficerName: selectedOfficer.name,
+        toOfficerRole: selectedOfficer.role,
+        toDepartment: selectedOfficer.department,
+        toOfficerPhone: selectedOfficer.phone,
+
+        reason: reason,
+      };
+
+      const res = await axios.post(url, body);
+
+      showToast({
+        type: "success",
+        title: "Success",
+        message: res.data.message || "Tappal forwarded!",
+      });
+
+      setSelectedTappalId("");
+      setSelectedOfficerId("");
+      setReason("");
+    } catch (err: any) {
+      showToast({
+        type: "error",
+        title: "Failed",
+        message: err?.response?.data?.error || "Error forwarding tappal.",
+      });
+    }
   };
+
+  // ========================= UI BELOW =============================
 
   const getRoleDisplayName = (role: string) => {
-    const roleNames: Record<string, string> = {
-      rdo: 'Revenue Divisional Officer',
-      tahsildar: 'Tahsildar'
-    };
-    return roleNames[role] || role;
+    const r = role?.toLowerCase() || "";
+    if (r.includes("tahsildar") || r.includes("tashildhar")) return "Tahsildar";
+    if (r.includes("rdo")) return "Revenue Divisional Officer";
+    if (r.includes("inspector")) return "Revenue Inspector";
+    if (r.includes("village")) return "Village Revenue Officer";
+    return role;
   };
+
+  if (loading) return <div className="p-6">Loading...</div>;
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
+      {/* HEADER */}
       <div className="bg-white rounded-xl shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Forward Tappal</h1>
-        <p className="text-gray-600">Forward tappals assigned to you to RDOs or Tahsildars</p>
+        <h1 className="text-2xl font-bold">Forward Tappal</h1>
+        <p className="text-gray-600">Forward tappals assigned to you</p>
       </div>
 
-      {/* Stats */}
+      {/* STATS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Available to Forward</p>
-              <p className="text-2xl font-bold text-purple-600">{myTappals.length}</p>
-            </div>
-            <FileText className="h-8 w-8 text-purple-600" />
-          </div>
+        <div className="bg-white p-6 rounded-xl shadow-sm">
+          <p className="text-sm text-gray-600">Available to Forward</p>
+          <p className="text-2xl font-bold text-purple-600">{myTappals.length}</p>
         </div>
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Officers Available</p>
-              <p className="text-2xl font-bold text-blue-600">{officersBelow.length}</p>
-            </div>
-            <User className="h-8 w-8 text-blue-600" />
-          </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm">
+          <p className="text-sm text-gray-600">Officers Available</p>
+          <p className="text-2xl font-bold text-blue-600">{officersBelow.length}</p>
         </div>
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Pending Forwards</p>
-              <p className="text-2xl font-bold text-orange-600">
-                {myTappals.filter(t => t.status === 'Pending').length}
-              </p>
-            </div>
-            <Send className="h-8 w-8 text-orange-600" />
-          </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-sm">
+          <p className="text-sm text-gray-600">Pending</p>
+          <p className="text-2xl font-bold text-orange-600">
+            {myTappals.filter((t) => t.status === "Pending").length}
+          </p>
         </div>
       </div>
 
-      {/* Forward Form */}
-      <div className="bg-white rounded-xl shadow-sm p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-6">Forward Tappal</h2>
-        
-        <div className="space-y-6">
-          {/* Select Tappal */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Select Tappal to Forward *
-            </label>
-            <select
-              value={selectedTappalId}
-              onChange={(e) => setSelectedTappalId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            >
-              <option value="">Choose a tappal...</option>
-              {myTappals.map(tappal => (
-                <option key={tappal.id} value={tappal.tappalId}>
-                  {tappal.tappalId} - {tappal.subject} ({tappal.status})
-                </option>
-              ))}
-            </select>
+      {/* FORWARD FORM */}
+      <div className="bg-white p-6 rounded-xl shadow-sm space-y-6">
+        <h2 className="text-lg font-semibold">Forward Tappal</h2>
+
+        {/* SELECT TAPPAL */}
+        <div>
+          <label className="text-sm">Select Tappal *</label>
+          <select
+            value={selectedTappalId}
+            onChange={(e) => setSelectedTappalId(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          >
+            <option value="">Choose tappal...</option>
+            {myTappals.map((t) => (
+              <option key={t.tappalId} value={t.tappalId}>
+                {t.tappalId} - {t.subject}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* DETAILS */}
+        {selectedTappal && (
+          <div className="bg-purple-50 p-4 rounded-lg border">
+            <h3 className="font-medium mb-2">Tappal Details</h3>
+            <p><b>ID:</b> {selectedTappal.tappalId}</p>
+            <p><b>Department:</b> {selectedTappal.department}</p>
+            <p><b>Expiry:</b> {formatDate(selectedTappal.expiryDate)}</p>
+            <p><b>Status:</b> {selectedTappal.status}</p>
+            <p><b>Subject:</b> {selectedTappal.subject}</p>
           </div>
+        )}
 
-          {/* Tappal Details */}
-          {selectedTappal && (
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-              <h3 className="text-sm font-medium text-purple-900 mb-3">Selected Tappal Details</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                <div className="flex items-center space-x-2">
-                  <FileText className="h-4 w-4 text-purple-600" />
-                  <span className="text-gray-600">ID:</span>
-                  <span className="font-medium text-purple-900">{selectedTappal.tappalId}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Building className="h-4 w-4 text-purple-600" />
-                  <span className="text-gray-600">Department:</span>
-                  <span className="font-medium text-purple-900">{selectedTappal.departmentName}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Calendar className="h-4 w-4 text-purple-600" />
-                  <span className="text-gray-600">Expiry:</span>
-                  <span className="font-medium text-purple-900">{formatDate(selectedTappal.expiryDate)}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-600">Status:</span>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(selectedTappal.status)}`}>
-                    {selectedTappal.status}
-                  </span>
-                </div>
-                <div className="md:col-span-2">
-                  <span className="text-gray-600">Subject:</span>
-                  <span className="ml-2 font-medium text-purple-900">{selectedTappal.subject}</span>
-                </div>
-              </div>
-            </div>
-          )}
+        {/* SELECT OFFICER */}
+        <div>
+          <label className="text-sm">Forward to Officer *</label>
+          <select
+            value={selectedOfficerId}
+            onChange={(e) => setSelectedOfficerId(e.target.value)}
+            className="w-full px-3 py-2 border rounded-lg"
+          >
+            <option value="">Choose officer...</option>
+            {officersBelow.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name} — {getRoleDisplayName(o.role)}
+              </option>
+            ))}
+          </select>
+        </div>
 
-          {/* Select Officer */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Forward to Officer *
-            </label>
-            <select
-              value={selectedOfficerId}
-              onChange={(e) => setSelectedOfficerId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            >
-              <option value="">Choose an officer...</option>
-              {officersBelow.map(officer => (
-                <option key={officer.id} value={officer.id}>
-                  {officer.name} - {getRoleDisplayName(officer.role)} ({officer.department})
-                </option>
-              ))}
-            </select>
+        {/* OFFICER DETAILS */}
+        {selectedOfficer && (
+          <div className="bg-blue-50 p-4 rounded-lg border">
+            <h3 className="font-medium mb-2">Officer Details</h3>
+            <p><b>Name:</b> {selectedOfficer.name}</p>
+            <p><b>Role:</b> {getRoleDisplayName(selectedOfficer.role)}</p>
+            <p><b>Department:</b> {selectedOfficer.department}</p>
+            <p><b>Phone:</b> {selectedOfficer.phone}</p>
           </div>
+        )}
 
-          {/* Officer Details */}
-          {selectedOfficer && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <h3 className="text-sm font-medium text-blue-900 mb-3">Selected Officer Details</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                <div className="flex items-center space-x-2">
-                  <User className="h-4 w-4 text-blue-600" />
-                  <span className="text-gray-600">Name:</span>
-                  <span className="font-medium text-blue-900">{selectedOfficer.name}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-600">Role:</span>
-                  <span className="font-medium text-blue-900">{getRoleDisplayName(selectedOfficer.role)}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Building className="h-4 w-4 text-blue-600" />
-                  <span className="text-gray-600">Department:</span>
-                  <span className="font-medium text-blue-900">{selectedOfficer.department}</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-gray-600">Phone:</span>
-                  <span className="font-medium text-blue-900">{selectedOfficer.phoneNumber}</span>
-                </div>
-              </div>
-            </div>
-          )}
+        {/* REASON */}
+        <div>
+          <label className="text-sm">Reason *</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={4}
+            className="w-full px-3 py-2 border rounded-lg"
+            placeholder="Enter reason..."
+          />
+        </div>
 
-          {/* Reason */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Reason for Forwarding *
-            </label>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              rows={4}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              placeholder="Enter the reason for forwarding this tappal to the selected officer..."
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              This reason will be visible in the movement history and the officer will be notified.
-            </p>
-          </div>
+        {/* BUTTONS */}
+        <div className="flex justify-end space-x-4">
+          <button
+            className="px-4 py-2 border rounded-lg"
+            onClick={() => {
+              setSelectedTappalId("");
+              setSelectedOfficerId("");
+              setReason("");
+            }}
+          >
+            Clear
+          </button>
 
-          {/* Warning */}
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-            <div className="flex items-start space-x-3">
-              <AlertTriangle className="h-5 w-5 text-yellow-600 flex-shrink-0 mt-0.5" />
-              <div className="text-sm text-yellow-800">
-                <p className="font-medium">Important:</p>
-                <ul className="mt-1 space-y-1">
-                  <li>• Once forwarded, the tappal will be assigned to the selected officer</li>
-                  <li>• The officer will receive a notification about the new assignment</li>
-                  <li>• This action will be recorded in the movement history</li>
-                  <li>• You will no longer be the assigned officer for this tappal</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          {/* Submit Button */}
-          <div className="flex items-center justify-end space-x-3">
-            <button
-              onClick={() => {
-                setSelectedTappalId('');
-                setSelectedOfficerId('');
-                setReason('');
-              }}
-              className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-            >
-              Clear Form
-            </button>
-            <button
-              onClick={handleForward}
-              disabled={!selectedTappal || !selectedOfficer || !reason.trim()}
-              className="px-6 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
-            >
-              <Send className="h-4 w-4" />
-              <span>Forward Tappal</span>
-            </button>
-          </div>
+          <button
+            onClick={handleForward}
+            disabled={!selectedTappal || !selectedOfficer || !reason.trim()}
+            className="px-6 py-2 bg-purple-600 text-white rounded-lg disabled:opacity-50"
+          >
+            Forward Tappal
+          </button>
         </div>
       </div>
 
-      {/* Available Tappals */}
-      {myTappals.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Your Available Tappals ({myTappals.length})
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Tappal ID
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Subject
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Department
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Priority
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
+      {/* TABLE */}
+      <div className="bg-white p-6 rounded-xl shadow-sm">
+        <h2 className="text-lg font-semibold mb-4">
+          Your Tappals ({myTappals.length})
+        </h2>
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs">Tappal ID</th>
+                <th className="px-6 py-3 text-left text-xs">Subject</th>
+                <th className="px-6 py-3 text-left text-xs">Department</th>
+                <th className="px-6 py-3 text-left text-xs">Status</th>
+                <th className="px-6 py-3 text-left text-xs">Priority</th>
+                <th className="px-6 py-3 text-left text-xs">Select</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {myTappals.map((t) => (
+                <tr key={t.tappalId} className="border-b hover:bg-gray-50">
+
+                  {/* CLICKABLE TAPPAL ID */}
+                  <td
+                    className="px-6 py-4 text-purple-600 font-medium cursor-pointer hover:underline"
+                    onClick={() => navigate(`/tappal/${t.tappalId}`)}
+                  >
+                    {t.tappalId}
+                  </td>
+
+                  <td className="px-6 py-4">{t.subject}</td>
+                  <td className="px-6 py-4">{t.department}</td>
+
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded text-xs ${getStatusColor(t.status)}`}>
+                      {t.status}
+                    </span>
+                  </td>
+
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded text-xs ${getPriorityColor(t.priority)}`}>
+                      {t.priority}
+                    </span>
+                  </td>
+
+                  <td className="px-6 py-4">
+                    <button
+                      onClick={() => setSelectedTappalId(t.tappalId)}
+                      className="text-purple-600"
+                    >
+                      Select
+                    </button>
+                  </td>
+
                 </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {myTappals.map((tappal) => (
-                  <tr key={tappal.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm font-medium text-purple-600">{tappal.tappalId}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="max-w-xs">
-                        <p className="text-sm font-medium text-gray-900 truncate">{tappal.subject}</p>
-                        <p className="text-xs text-gray-500 truncate">{tappal.description}</p>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-gray-900">{tappal.departmentName}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(tappal.status)}`}>
-                        {tappal.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(tappal.priority)}`}>
-                        {tappal.priority}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <button
-                        onClick={() => setSelectedTappalId(tappal.tappalId)}
-                        className="text-purple-600 hover:text-purple-800 text-sm font-medium"
-                      >
-                        Select for Forward
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+              ))}
+            </tbody>
 
-      {/* Empty State */}
-      {myTappals.length === 0 && (
-        <div className="bg-white rounded-xl shadow-sm p-12">
-          <div className="text-center">
-            <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Tappals Available</h3>
-            <p className="text-gray-500">You don't have any tappals assigned to you that can be forwarded.</p>
-          </div>
+          </table>
         </div>
-      )}
+      </div>
     </div>
   );
 };
