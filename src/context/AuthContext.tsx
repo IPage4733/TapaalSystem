@@ -3,9 +3,9 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { AuthContextType, AuthUser, LoginCredentials } from "../types/User";
 import {
-  getAuthToken,
-  setAuthToken,
-  removeAuthToken,
+  // getAuthToken,
+  // setAuthToken,
+  // removeAuthToken,
   getStoredAuthUser,
   setStoredAuthUser,
   removeStoredAuthUser,

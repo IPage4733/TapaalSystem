@@ -1,197 +1,267 @@
-import React, { useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { 
-  FileText, 
-  Clock, 
-  Users, 
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  FileText,
+  Clock,
+  Users,
   AlertTriangle,
-  CheckCircle,
-  ArrowRight,
   Calendar,
   User,
   Building,
-  BarChart3,
   Send,
-  Filter
-} from 'lucide-react';
-import { mockTappals, mockDepartments } from '../../data/mockTappals';
-import { mockUsers } from '../../data/mockUsers';
-import { useAuth } from '../../context/AuthContext';
-import { formatDate, isOverdue, getStatusColor } from '../../utils/dateUtils';
+  Filter,
+} from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
+
+/* -------------------- TYPES -------------------- */
+type Tappal = {
+  tappalId: string;
+  subject?: string;
+  assignedTo?: string;
+  assignedToName?: string;
+  department?: string;
+  departmentName?: string;
+  status?: string;
+  createdAt?: string;
+  expiryDate?: string;
+};
+
+type Officer = {
+  id: string;
+  name: string;
+  role: string;
+  department?: string;
+};
+
+/* -------------------- API URLS -------------------- */
+const OFFICER_API =
+  "https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer";
+
+const TAPPAL_API =
+  "https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals";
+
+/* -------------------- HELPERS -------------------- */
+
+const formatDate = (d?: string) => {
+  if (!d) return "-";
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return d;
+  return date.toLocaleDateString();
+};
+
+const isOverdue = (expiry?: string, status?: string) => {
+  if (!expiry) return false;
+
+  const closed = ["FINALIZED", "COMPLETED", "CLOSED"];
+  if (status && closed.includes(status.toUpperCase())) return false;
+
+  const today = new Date();
+  const exp = new Date(expiry);
+
+  return exp < new Date(today.setHours(0, 0, 0, 0));
+};
+
+/* -------------------- STATUS BADGE COLORS -------------------- */
+const getStatusColor = (status?: string) => {
+  if (!status) return "bg-gray-200 text-gray-700";
+
+  const s = status.toLowerCase();
+
+  if (s.includes("active")) return "bg-green-200 text-green-800";
+  if (s.includes("forward")) return "bg-yellow-200 text-yellow-800";
+  if (s.includes("pending")) return "bg-gray-200 text-gray-800";
+  if (s.includes("completed") || s.includes("finalized"))
+    return "bg-green-200 text-green-800";
+
+  return "bg-gray-200 text-gray-700";
+};
+
+/* -------------------- COMPONENT -------------------- */
 
 const TahsildarDashboardMain: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [filterMode, setFilterMode] = React.useState<'all' | 'assigned-to-me' | 'forwarded'>('all');
 
-  // Get officers below Tahsildar (Naib Tahsildar, RI, VRO, Clerk)
-  const officersBelow = useMemo(() => {
-    return mockUsers.filter(u => 
-      ['naib_tahsildar', 'ri', 'vro', 'clerk'].includes(u.role)
-    );
+  const [tappals, setTappals] = useState<Tappal[]>([]);
+  const [officers, setOfficers] = useState<Officer[]>([]);
+  const [filterMode, setFilterMode] =
+    useState<"all" | "assigned-to-me" | "forwarded">("all");
+  const [loading, setLoading] = useState(true);
+
+  /* -------------------- FETCH -------------------- */
+  useEffect(() => {
+    Promise.all([
+      fetch(OFFICER_API).then((r) => r.json()),
+      fetch(TAPPAL_API).then((r) => r.json()),
+    ])
+      .then(([o, t]) => {
+        setOfficers(o.officers || []);
+        setTappals(Array.isArray(t) ? t : t.tappals || []);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  // Get tappals assigned to Tahsildar
-  const myTappals = useMemo(() => {
-    return mockTappals.filter(t => t.assignedTo === user?.id);
-  }, [user]);
+  /* -------------------- OFFICERS UNDER COMMAND -------------------- */
+  const officersBelow = useMemo(() => {
+    if (!user?.id) return [];
 
-  // Get tappals assigned to officers below Tahsildar
-  const officerTappals = useMemo(() => {
-    const officerIds = officersBelow.map(o => o.id);
-    return mockTappals.filter(t => officerIds.includes(t.assignedTo));
-  }, [officersBelow]);
+    const allowedRoles = [
+      "naib tahsildar",
+      "naib_tahsildar",
+      "revenue inspector",
+      "ri",
+      "village revenue officer",
+      "vro",
+      "clerk",
+    ];
 
-  // Calculate stats
+    const exclude = ["tahsildar", "collector", "admin", "dro"];
+
+    return officers.filter((o) => {
+      if (!o.role) return false;
+
+      const role = o.role.toLowerCase();
+      if (o.id === user.id) return false;
+      if (exclude.some((ex) => role.includes(ex))) return false;
+
+      return allowedRoles.some((r) => role.includes(r));
+    });
+  }, [officers, user]);
+
+  /* -------------------- FILTERS -------------------- */
+  const myTappals = tappals.filter((t) => t.assignedTo === user?.id);
+
+  const officerIds = officersBelow.map((o) => o.id);
+
+  const officerTappals = tappals.filter(
+    (t) => t.assignedTo && officerIds.includes(t.assignedTo)
+  );
+
+  /* -------------------- STATS -------------------- */
+  const overdueTappalsInMandal =
+    [...myTappals, ...officerTappals].filter((t) =>
+      isOverdue(t.expiryDate, t.status)
+    ).length;
+
   const totalTappalsInMandal = myTappals.length + officerTappals.length;
-  const overdueTappalsInMandal = [...myTappals, ...officerTappals].filter(t => 
-    isOverdue(t.expiryDate, t.status)
-  ).length;
+
   const officersUnderCommand = officersBelow.length;
-  const tappalsAssignedToTahsildar = myTappals.length;
 
-  // Get recent tappals based on filter
+  /* ---------------------------------------------------------
+     CORRECT FORWARDED COUNT (TRUE DASHBOARD LOGIC)
+     --------------------------------------------------------- */
+
+  const forwardedTappalsCount = [...myTappals, ...officerTappals].filter(
+    (t) => t.status?.toLowerCase().includes("forward")
+  ).length;
+
+  /* -------------------- RECENT -------------------- */
   const recentTappals = useMemo(() => {
-    let tappalsToShow = [];
-    
-    switch (filterMode) {
-      case 'assigned-to-me':
-        tappalsToShow = myTappals;
-        break;
-      case 'forwarded':
-        tappalsToShow = officerTappals;
-        break;
-      default:
-        tappalsToShow = [...myTappals, ...officerTappals];
-    }
-    
-    return tappalsToShow
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    let data: Tappal[] = [];
+
+    if (filterMode === "assigned-to-me") data = myTappals;
+    else if (filterMode === "forwarded") data = officerTappals;
+    else data = [...myTappals, ...officerTappals];
+
+    return data
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || "").getTime() -
+          new Date(a.createdAt || "").getTime()
+      )
       .slice(0, 5);
-  }, [myTappals, officerTappals, filterMode]);
+  }, [filterMode, myTappals, officerTappals]);
 
-  const handleTappalClick = (tappalId: string) => {
-    navigate(`/tappal/${tappalId}`);
-  };
+  const openTappal = (id: string) => navigate(`/tappal/${id}`);
 
-  const quickLinks = [
-    {
-      title: 'My Assigned Tappals',
-      description: 'Tappals assigned to me',
-      icon: FileText,
-      path: '/tahsildar-dashboard/my-tappals',
-      color: 'green',
-      count: myTappals.length
-    },
-    {
-      title: 'Subordinate Officer Tappals',
-      description: 'Track officer assignments',
-      icon: Users,
-      path: '/tahsildar-dashboard/officer-tappals',
-      color: 'blue',
-      count: officerTappals.length
-    },
-    {
-      title: 'Forward Tappals',
-      description: 'Forward my tappals',
-      icon: Send,
-      path: '/tahsildar-dashboard/forward-tappal',
-      color: 'emerald'
-    },
-    {
-      title: 'Overdue Tappals',
-      description: 'Manage overdue items',
-      icon: Clock,
-      path: '/tahsildar-dashboard/overdue',
-      color: 'red',
-      count: overdueTappalsInMandal
-    },
-    {
-      title: 'Mandal Analytics',
-      description: 'Performance metrics',
-      icon: BarChart3,
-      path: '/tahsildar-dashboard/analytics',
-      color: 'indigo'
-    },
-    {
-      title: 'Global Search',
-      description: 'Search all records',
-      icon: FileText,
-      path: '/tahsildar-dashboard/search',
-      color: 'teal'
-    }
-  ];
+  /* -------------------- LOADING -------------------- */
+  if (loading)
+    return (
+      <div className="p-6">
+        <p className="text-gray-500">Loading...</p>
+      </div>
+    );
 
+  /* -------------------- UI -------------------- */
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div className="bg-white rounded-xl shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Tahsildar Dashboard</h1>
-        <p className="text-gray-600">Monitor and manage tappals under your mandal</p>
+        <h1 className="text-2xl font-bold">Tahsildar Dashboard</h1>
+        <p className="text-gray-600">
+          Monitor and manage tappals under your mandal
+        </p>
       </div>
 
-      {/* Stats Grid */}
+      {/* -------------------- Stats Grid -------------------- */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Total Tappals in Mandal</p>
-              <p className="text-2xl font-bold text-gray-900">{totalTappalsInMandal}</p>
+              <p className="text-sm text-gray-600">Total Tappals in Mandal</p>
+              <p className="text-2xl font-bold">{totalTappalsInMandal}</p>
             </div>
             <div className="p-3 bg-green-100 rounded-full">
-              <FileText className="h-6 w-6 text-green-600" />
+              <FileText className="text-green-600" />
             </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Assigned to Tahsildar</p>
-              <p className="text-2xl font-bold text-green-600">{tappalsAssignedToTahsildar}</p>
+              <p className="text-sm text-gray-600">Assigned to Tahsildar</p>
+              <p className="text-2xl font-bold text-green-600">
+                {myTappals.length}
+              </p>
             </div>
             <div className="p-3 bg-green-100 rounded-full">
-              <User className="h-6 w-6 text-green-600" />
+              <User className="text-green-600" />
             </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Overdue Tappals</p>
-              <p className="text-2xl font-bold text-red-600">{overdueTappalsInMandal}</p>
+              <p className="text-sm text-gray-600">Overdue Tappals</p>
+              <p className="text-2xl font-bold text-red-600">
+                {overdueTappalsInMandal}
+              </p>
             </div>
             <div className="p-3 bg-red-100 rounded-full">
-              <AlertTriangle className="h-6 w-6 text-red-600" />
+              <AlertTriangle className="text-red-600" />
             </div>
           </div>
         </div>
 
         <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
+          <div className="flex justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Officers Under Command</p>
-              <p className="text-2xl font-bold text-blue-600">{officersUnderCommand}</p>
+              <p className="text-sm text-gray-600">Officers Under Command</p>
+              <p className="text-2xl font-bold text-blue-600">
+                {officersUnderCommand}
+              </p>
             </div>
             <div className="p-3 bg-blue-100 rounded-full">
-              <Users className="h-6 w-6 text-blue-600" />
+              <Users className="text-blue-600" />
             </div>
           </div>
         </div>
       </div>
 
+      {/* -------------------- Recent + Quick Access -------------------- */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Tappals */}
         <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Tappals</h2>
-            <div className="flex items-center space-x-2">
-              <Filter className="h-4 w-4 text-gray-400" />
+          <div className="flex justify-between mb-4">
+            <h2 className="text-lg font-semibold">Recent Tappals</h2>
+
+            <div className="flex items-center gap-2">
+              <Filter className="w-4 h-4 text-gray-400" />
               <select
                 value={filterMode}
                 onChange={(e) => setFilterMode(e.target.value as any)}
-                className="text-sm border border-gray-300 rounded-lg px-3 py-1 focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                className="text-sm border rounded-lg px-2 py-1"
               >
                 <option value="all">All</option>
                 <option value="assigned-to-me">Assigned to Me</option>
@@ -199,80 +269,114 @@ const TahsildarDashboardMain: React.FC = () => {
               </select>
             </div>
           </div>
-          
+
           <div className="space-y-3">
-            {recentTappals.length === 0 ? (
-              <div className="text-center py-8">
-                <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-500">
-                  {filterMode === 'assigned-to-me' 
-                    ? 'No tappals assigned to you' 
-                    : filterMode === 'forwarded'
-                    ? 'No tappals forwarded to subordinates'
-                    : 'No tappals in mandal'
-                  }
-                </p>
-              </div>
-            ) : (
-              recentTappals.map((tappal) => (
-                <div
-                  key={tappal.id}
-                  className="p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                  onClick={() => handleTappalClick(tappal.tappalId)}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-900 text-sm">{tappal.tappalId}</p>
-                      <p className="text-gray-600 text-sm truncate">{tappal.subject}</p>
-                      <div className="flex items-center space-x-4 mt-2">
-                        <div className="flex items-center space-x-1">
-                          <User className="h-3 w-3 text-gray-400" />
-                          <span className="text-xs text-gray-500">{tappal.assignedToName}</span>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <Building className="h-3 w-3 text-gray-400" />
-                          <span className="text-xs text-gray-500">{tappal.departmentName}</span>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <Calendar className="h-3 w-3 text-gray-400" />
-                          <span className="text-xs text-gray-500">{formatDate(tappal.createdAt)}</span>
-                        </div>
-                      </div>
+            {recentTappals.map((t) => (
+              <div
+                key={t.tappalId}
+                onClick={() => openTappal(t.tappalId)}
+                className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer"
+              >
+                <div className="flex justify-between">
+                  <div>
+                    <p className="font-medium">{t.tappalId}</p>
+                    <p className="text-gray-600">{t.subject}</p>
+
+                    <div className="flex gap-4 text-xs text-gray-500 mt-2">
+                      <span className="flex items-center gap-1">
+                        <User className="w-3 h-3" />
+                        {t.assignedToName}
+                      </span>
+
+                      <span className="flex items-center gap-1">
+                        <Building className="w-3 h-3" />
+                        {t.departmentName || t.department}
+                      </span>
+
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-3 h-3" />
+                        {formatDate(t.createdAt)}
+                      </span>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(tappal.status)}`}>
-                      {tappal.status}
-                    </span>
                   </div>
+
+                  {/* -------- CAPSULE STATUS BADGE -------- */}
+                  <span
+                    className={`h-6 min-w-[72px] flex items-center justify-center px-3 text-[11px] font-semibold rounded-full ${getStatusColor(
+                      t.status
+                    )}`}
+                  >
+                    {t.status}
+                  </span>
                 </div>
-              ))
-            )}
+              </div>
+            ))}
           </div>
         </div>
 
-        {/* Quick Links */}
+        {/* Quick Access */}
         <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Access</h2>
-          <div className="grid grid-cols-1 gap-3">
-            {quickLinks.map((link) => {
-              const Icon = link.icon;
+          <h2 className="text-lg font-semibold mb-4">Quick Access</h2>
+
+          <div className="space-y-3">
+            {[
+              {
+                title: "My Assigned Tappals",
+                desc: "Tappals assigned to me",
+                color: "green",
+                icon: FileText,
+                path: "/tahsildar-dashboard/my-tappals",
+                count: myTappals.length,
+              },
+              {
+                title: "Subordinate Officer Tappals",
+                desc: "Track officer assignments",
+                color: "blue",
+                icon: Users,
+                path: "/tahsildar-dashboard/officer-tappals",
+                count: officerTappals.length,
+              },
+              {
+                title: "Forward Tappals",
+                desc: "Forward my tappals",
+                color: "emerald",
+                icon: Send,
+                path: "/tahsildar-dashboard/forward-tappal",
+                count: forwardedTappalsCount, // 🔥 corrected
+              },
+              {
+                title: "Overdue Tappals",
+                desc: "Manage overdue items",
+                color: "red",
+                icon: Clock,
+                path: "/tahsildar-dashboard/overdue",
+                count: overdueTappalsInMandal,
+              },
+            ].map((item) => {
+              const Icon = item.icon;
               return (
                 <button
-                  key={link.path}
-                  onClick={() => navigate(link.path)}
-                  className={`p-4 rounded-lg border border-gray-200 hover:border-${link.color}-300 hover:bg-${link.color}-50 transition-colors text-left group flex items-center justify-between`}
+                  key={item.title}
+                  onClick={() => navigate(item.path)}
+                  className={`p-4 border rounded-lg flex justify-between w-full hover:bg-${item.color}-50`}
                 >
-                  <div className="flex items-center space-x-3">
-                    <div className={`p-2 bg-${link.color}-100 rounded-lg group-hover:bg-${link.color}-200 transition-colors`}>
-                      <Icon className={`h-5 w-5 text-${link.color}-600`} />
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 bg-${item.color}-100 rounded-lg`}>
+                      <Icon className={`text-${item.color}-600`} />
                     </div>
+
                     <div>
-                      <h3 className="font-medium text-gray-900 text-sm">{link.title}</h3>
-                      <p className="text-xs text-gray-500 mt-1">{link.description}</p>
+                      <p className="font-medium">{item.title}</p>
+                      <p className="text-xs text-gray-500">{item.desc}</p>
                     </div>
                   </div>
-                  {link.count !== undefined && (
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium bg-${link.color}-100 text-${link.color}-700`}>
-                      {link.count}
+
+                  {/* Correct Capsule Count Badge */}
+                  {item.count !== undefined && (
+                    <span
+                      className={`h-5 min-w-[22px] flex items-center justify-center px-2 text-[10px] rounded-full bg-${item.color}-100 text-${item.color}-700`}
+                    >
+                      {item.count}
                     </span>
                   )}
                 </button>
