@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { AuthContextType, AuthUser, LoginCredentials } from "../types/User";
 
 import {
-  getAuthToken,
   setAuthToken,
   removeAuthToken,
   getStoredAuthUser,
@@ -27,23 +26,44 @@ interface AuthProviderProps {
 const LOGIN_API =
   "https://guxwtk0to9.execute-api.ap-southeast-1.amazonaws.com/dev/login";
 
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    try {
-      const raw = getStoredAuthUser();
-      return raw ? (JSON.parse(raw) as AuthUser) : null;
-    } catch {
-      return null;
-    }
-  });
+/**
+ * 🔥 FINAL ROLE NORMALIZER
+ * Handles:
+ * - "Joint Collector"
+ * - "Co-Officer"
+ * - "Naib Tahsildar"
+ * - "RI", "VRO", etc.
+ */
+const normalizeRole = (role: string): string =>
+  role
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_"); // space OR hyphen → underscore
 
+export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  /** 🔁 Restore user on page refresh */
   useEffect(() => {
-    setIsLoading(false);
+    try {
+      const raw = getStoredAuthUser();
+      if (raw) {
+        const parsed = JSON.parse(raw) as AuthUser;
+        setUser({
+          ...parsed,
+          role: normalizeRole(parsed.role), // ✅ normalize on restore
+        });
+      }
+    } catch (err) {
+      console.error("[auth] Failed to restore user", err);
+      removeStoredAuthUser();
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
-  /** ================= LOGIN ================= */
+  /** 🔐 LOGIN — backend is source of truth */
   const login = async (
     credentials: LoginCredentials
   ): Promise<{ success: boolean; user?: AuthUser; error?: string }> => {
@@ -59,42 +79,33 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }),
       });
 
-      const text = await response.text();
-      const json = text ? JSON.parse(text) : null;
+      const json = await response.json();
 
-      if (!response.ok) {
+      if (!response.ok || !json?.success || !json?.officer) {
         setIsLoading(false);
         return {
           success: false,
           error:
             response.status === 401
               ? "Invalid email or password"
-              : "Server error while authenticating",
+              : "Authentication failed",
         };
-      }
-
-      if (!json?.success || !json?.officer) {
-        setIsLoading(false);
-        return { success: false, error: "Invalid response from server" };
       }
 
       const officer = json.officer;
 
-      /** ✅ BACKEND IS SOURCE OF TRUTH */
       const authUser: AuthUser = {
         id: officer.id,
         name: officer.name,
         email: officer.email,
-        role: officer.role, // 🔥 NO NORMALIZATION
+        role: normalizeRole(officer.role), // ✅ normalize on login
         department: officer.department,
         phoneNumber: officer.phone || officer.phoneNumber,
       };
 
       setUser(authUser);
       setStoredAuthUser(JSON.stringify(authUser));
-
-      // Placeholder token (replace when JWT is added)
-      setAuthToken("FAKE_TOKEN");
+      setAuthToken("FAKE_TOKEN"); // replace with JWT later
 
       setIsLoading(false);
       return { success: true, user: authUser };
@@ -108,7 +119,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     }
   };
 
-  /** ================= LOGOUT ================= */
+  /** 🚪 LOGOUT */
   const logout = () => {
     setUser(null);
     removeAuthToken();
