@@ -146,14 +146,22 @@ function App() {
             <Route 
               path="/collector-dashboard/*" 
               element={
-                <ProtectedRoute allowedRoles={['collector']}>
+                <ProtectedRoute allowedRoles={['collector','joint_collector']}>
                   <CollectorLayout />
                 </ProtectedRoute>
               } 
             >
               <Route index element={<CollectorDashboardMain />} />
               <Route path="tappals" element={<TappalsOverview />} />
-              <Route path="create-tappal" element={<CollectorCreateTappal />} />
+              <Route
+  path="create-tappal"
+  element={
+    <ProtectedRoute allowedRoles={['collector', 'joint_collector']}>
+      <CollectorCreateTappal />
+    </ProtectedRoute>
+  }
+/>
+
               <Route path="search" element={<GlobalSearch />} />
               <Route path="department-analytics" element={<DepartmentAnalytics />} />
               <Route path="employee-performance" element={<EmployeePerformance />} />
