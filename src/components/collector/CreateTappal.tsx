@@ -1,516 +1,364 @@
-import React, { useState, useMemo } from 'react';
-import { useAuth } from '../../context/AuthContext';
-import { useToast } from '../common/ToastContainer';
-import { useSearchParams } from 'react-router-dom';
-import { 
-  Plus, 
-  FileText, 
-  User, 
-  Phone, 
-  Building, 
-  Calendar,
-  EyeOff,
-  Save,
-  X,
-  Paperclip,
-  UserPlus
-} from 'lucide-react';
-import { mockDepartments, mockPetitions } from '../../data/mockTappals';
-import { mockUsers } from '../../data/mockUsers';
+import React, { useEffect, useMemo, useState } from "react";
+import { Plus, FileText, EyeOff, X, UserPlus } from "lucide-react";
+import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../common/ToastContainer";
+
+/* ================= APIs ================= */
+
+const PETITIONS_API =
+  "https://ec8jdej696.execute-api.ap-southeast-1.amazonaws.com/dev/newpetition";
+
+const DEPARTMENTS_API =
+  "https://1qgedzknw2.execute-api.ap-southeast-1.amazonaws.com/prod/departmentsnew";
+
+const OFFICERS_API =
+  "https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer";
+
+const CREATE_TAPPAL_API =
+  "https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals";
+
+const UPLOAD_API =
+  "https://plcqzpx1rb.execute-api.ap-southeast-1.amazonaws.com/dev/petitions/upload-url";
+
+/* ================= COMPONENT ================= */
 
 const CreateTappal: React.FC = () => {
   const { user } = useAuth();
   const { showToast } = useToast();
-  const [searchParams] = useSearchParams();
-  const preSelectedPetition = searchParams.get('petition');
+
+  const [petitions, setPetitions] = useState<any[]>([]);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [officers, setOfficers] = useState<any[]>([]);
 
   const [formData, setFormData] = useState({
-    petitionId: preSelectedPetition || '',
-    petitionType: '',
-    petitionerName: '',
-    phoneNumber: '',
-    email: '',
-    aadharNumber: '',
-    department: '',
-    subject: '',
-    description: '',
+    petitionId: "",
+    petitionType: "",
+    petitionerName: "",
+    phoneNumber: "",
+    email: "",
+    aadharNumber: "",
+    department: "",
+    subject: "",
+    description: "",
+    priority: "Medium",
+    expiryDate: "",
+    assignedTo: "",
     isConfidential: false,
-    expiryDate: '',
-    assignedTo: '',
-    priority: 'Medium',
-    attachments: [] as string[]
+    attachments: [] as File[],
   });
 
-  const petitionTypes = [
-    'Land Revenue',
-    'Property Tax',
-    'Birth Certificate',
-    'Death Certificate',
-    'Income Certificate',
-    'Caste Certificate',
-    'Residence Certificate',
-    'Water Connection',
-    'Building Permission',
-    'Road Construction',
-    'Drainage Issues',
-    'Electricity Connection',
-    'Other'
-  ];
+  /* ================= LOAD DATA ================= */
 
-  const priorityOptions = ['Low', 'Medium', 'High', 'Urgent'];
+  useEffect(() => {
+    fetch(PETITIONS_API)
+      .then((r) => r.json())
+      .then((d) => setPetitions(Array.isArray(d) ? d : []));
 
-  // Get officers who can be assigned (excluding collector)
-  const availableOfficers = mockUsers.filter(u => u.role !== 'collector');
+    fetch(DEPARTMENTS_API)
+      .then((r) => r.json())
+      .then((d) =>
+        setDepartments(
+          Array.isArray(d)
+            ? d.map((x: any) => ({ id: x.id, name: x.departmentName }))
+            : []
+        )
+      );
 
-  // Filter officers by selected department
-  const departmentOfficers = availableOfficers.filter(officer => 
-    !formData.department || officer.department.toLowerCase().includes(
-      mockDepartments.find(d => d.id === formData.department)?.name.toLowerCase() || ''
-    )
-  );
+    fetch(OFFICERS_API)
+      .then((r) => r.json())
+      .then((d) => setOfficers(d.officers || []));
+  }, []);
 
-  // Pre-fill form if petition is selected
-  const selectedPetition = useMemo(() => {
-    if (!formData.petitionId) return null;
-    return mockPetitions.find(p => p.petitionId === formData.petitionId);
-  }, [formData.petitionId]);
+  /* ================= DERIVED ================= */
 
-  React.useEffect(() => {
-    if (selectedPetition) {
-      setFormData(prev => ({
-        ...prev,
-        petitionerName: selectedPetition.petitionerName,
-        phoneNumber: selectedPetition.petitionerPhone,
-        email: selectedPetition.petitionerEmail,
-        department: selectedPetition.department,
-        subject: selectedPetition.subject,
-        description: selectedPetition.description,
-        isConfidential: selectedPetition.isConfidential
-      }));
-    }
-  }, [selectedPetition]);
+  const selectedDeptName =
+    departments.find((d) => d.id === formData.department)?.name || "";
 
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (files) {
-      const fileNames = Array.from(files).map(file => file.name);
-      setFormData(prev => ({ 
-        ...prev, 
-        attachments: [...prev.attachments, ...fileNames] 
-      }));
-    }
-  };
+  const departmentOfficers = useMemo(() => {
+    return officers.filter((o: any) =>
+      (o.department || "")
+        .toLowerCase()
+        .includes(selectedDeptName.toLowerCase())
+    );
+  }, [officers, selectedDeptName]);
 
-  const removeAttachment = (index: number) => {
-    setFormData(prev => ({
-      ...prev,
-      attachments: prev.attachments.filter((_, i) => i !== index)
+  /* ================= HANDLERS ================= */
+
+  const handleChange = (e: any) => {
+    const { name, value, type, checked } = e.target;
+    setFormData((p) => ({
+      ...p,
+      [name]: type === "checkbox" ? checked : value,
     }));
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    setFormData((p) => ({
+      ...p,
+      attachments: [...p.attachments, ...Array.from(e.target.files)],
+    }));
+  };
+
+  const removeAttachment = (i: number) => {
+    setFormData((p) => ({
+      ...p,
+      attachments: p.attachments.filter((_, idx) => idx !== i),
+    }));
+  };
+
+  /* ================= FILE UPLOAD ================= */
+
+  const uploadSingleFile = async (file: File) => {
+    const res = await fetch(UPLOAD_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileType: file.type,
+      }),
+    });
+
+    if (!res.ok) throw new Error("Signed URL error");
+
+    const { uploadUrl, fileUrl, key } = await res.json();
+
+    const putRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": file.type },
+      body: file,
+    });
+
+    if (!putRes.ok) throw new Error("S3 upload failed");
+
+    return { fileName: file.name, fileType: file.type, fileUrl, key };
+  };
+
+  /* ================= SUBMIT ================= */
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Validation
-    if (!formData.petitionerName || !formData.phoneNumber || !formData.department || 
-        !formData.subject || !formData.description || !formData.expiryDate || !formData.assignedTo) {
+
+    if (
+      !formData.petitionerName ||
+      !formData.phoneNumber ||
+      !formData.department ||
+      !formData.subject ||
+      !formData.description ||
+      !formData.expiryDate ||
+      !formData.assignedTo
+    ) {
       showToast({
-        type: 'error',
-        title: 'Validation Error',
-        message: 'Please fill in all required fields.'
+        type: "error",
+        title: "Validation Error",
+        message: "Please fill all required fields",
       });
       return;
     }
 
-    // Generate tappal ID (in real app, this would be done by backend)
-    const tappalId = `TAP-2025-${String(Math.floor(Math.random() * 900) + 100).padStart(3, '0')}`;
-    
-    const assignedOfficer = availableOfficers.find(o => o.id === formData.assignedTo);
-    const department = mockDepartments.find(d => d.id === formData.department);
-    
-    // In real implementation, this would:
-    // 1. Create tappal record in database
-    // 2. Generate unique tappal ID
-    // 3. Send notification to assigned officer
-    // 4. Update petition status if linked
-    // 5. Create initial movement record
+    try {
+      const uploadedFiles = await Promise.all(
+        formData.attachments.map(uploadSingleFile)
+      );
 
-    showToast({
-      type: 'success',
-      title: 'Tappal Created Successfully!',
-      message: `Tappal ${tappalId} has been created and assigned to ${assignedOfficer?.name} in ${department?.name}. ${formData.isConfidential ? 'Marked as confidential.' : ''}`,
-      duration: 8000
-    });
+      const officer = officers.find(
+        (o: any) => o.id === formData.assignedTo
+      );
 
-    // Reset form
-    setFormData({
-      petitionId: '',
-      petitionType: '',
-      petitionerName: '',
-      phoneNumber: '',
-      email: '',
-      aadharNumber: '',
-      department: '',
-      subject: '',
-      description: '',
-      isConfidential: false,
-      expiryDate: '',
-      assignedTo: '',
-      priority: 'Medium',
-      attachments: []
-    });
+      const payload = {
+        petitionId: formData.petitionId || undefined,
+        petitionType: formData.petitionType,
+        petitionerName: formData.petitionerName,
+        phoneNumber: formData.phoneNumber,
+        email: formData.email,
+        aadharNumber: formData.aadharNumber,
+        department: selectedDeptName,
+        subject: formData.subject,
+        description: formData.description,
+        priority: formData.priority,
+        expiryDate: formData.expiryDate,
+        isConfidential: formData.isConfidential,
+        assignedTo: formData.assignedTo,
+        assignedToName: officer?.name || "",
+        assignedToRole: officer?.role || officer?.designation || "",
+        createdBy: user?.email || "collector",
+        attachments: uploadedFiles,
+      };
+
+      const res = await fetch(CREATE_TAPPAL_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error("Create failed");
+
+      showToast({
+        type: "success",
+        title: "Success",
+        message: "Tappal created & file saved successfully",
+      });
+
+      setFormData({
+        petitionId: "",
+        petitionType: "",
+        petitionerName: "",
+        phoneNumber: "",
+        email: "",
+        aadharNumber: "",
+        department: "",
+        subject: "",
+        description: "",
+        priority: "Medium",
+        expiryDate: "",
+        assignedTo: "",
+        isConfidential: false,
+        attachments: [],
+      });
+    } catch (err: any) {
+      showToast({
+        type: "error",
+        title: "Error",
+        message: err.message || "Failed to create tappal",
+      });
+    }
   };
 
-  const handleClear = () => {
-    setFormData({
-      petitionId: '',
-      petitionType: '',
-      petitionerName: '',
-      phoneNumber: '',
-      email: '',
-      aadharNumber: '',
-      department: '',
-      subject: '',
-      description: '',
-      isConfidential: false,
-      expiryDate: '',
-      assignedTo: '',
-      priority: 'Medium',
-      attachments: []
-    });
-  };
-
-  const getRoleDisplayName = (role: string) => {
-    const roleNames: Record<string, string> = {
-      joint_collector: 'Joint Collector',
-      dro: 'District Revenue Officer',
-      rdo: 'Revenue Divisional Officer',
-      tahsildar: 'Tahsildar',
-      naib_tahsildar: 'Naib Tahsildar',
-      ri: 'Revenue Inspector',
-      vro: 'Village Revenue Officer',
-      clerk: 'Clerk'
-    };
-    return roleNames[role] || role;
-  };
+  /* ================= UI ================= */
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
       <div className="bg-white rounded-xl shadow-sm p-6">
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center gap-3">
           <Plus className="h-8 w-8 text-blue-600" />
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Create New Tappal</h1>
-            <p className="text-gray-600">Create a trackable tappal from citizen petition or new request</p>
+            <h1 className="text-2xl font-bold">Create New Tappal</h1>
+            <p className="text-gray-600">
+              Create a trackable tappal from citizen petition or new request
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Form */}
       <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm p-6">
         <div className="space-y-6">
-          {/* Petition Link (Optional) */}
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Link to Existing Petition (Optional)</h2>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Petition ID (Optional)
-              </label>
-              <select
-                value={formData.petitionId}
-                onChange={(e) => setFormData(prev => ({ ...prev, petitionId: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                <option value="">Create new tappal without linking to petition</option>
-                {mockPetitions.filter(p => !p.tappalId).map(petition => (
-                  <option key={petition.id} value={petition.petitionId}>
-                    {petition.petitionId} - {petition.subject} ({petition.petitionerName})
-                  </option>
-                ))}
-              </select>
-              {selectedPetition && (
-                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <p className="text-sm text-blue-800">
-                    <strong>Linked Petition:</strong> {selectedPetition.subject} by {selectedPetition.petitionerName}
-                  </p>
-                </div>
-              )}
-            </div>
+
+          <select name="petitionId" value={formData.petitionId} onChange={handleChange}
+            className="w-full border rounded px-3 py-2">
+            <option value="">Create new tappal without linking to petition</option>
+            {petitions.map((p: any) => (
+              <option key={p.petitionId} value={p.petitionId}>
+                {p.petitionId} – {p.subject}
+              </option>
+            ))}
+          </select>
+
+          <div className="grid grid-cols-2 gap-4">
+            <select name="petitionType" value={formData.petitionType}
+              onChange={handleChange} className="border rounded px-3 py-2">
+              <option value="">Select petition type</option>
+              <option>Land Revenue</option>
+              <option>Income Certificate</option>
+              <option>Caste Certificate</option>
+              <option>Residence Certificate</option>
+            </select>
+
+            <input name="petitionerName" value={formData.petitionerName}
+              onChange={handleChange} placeholder="Petitioner's Name"
+              className="border rounded px-3 py-2" />
+
+            <input name="phoneNumber" value={formData.phoneNumber}
+              onChange={handleChange} placeholder="Phone Number"
+              className="border rounded px-3 py-2" />
+
+            <input name="email" value={formData.email}
+              onChange={handleChange} placeholder="Email Address"
+              className="border rounded px-3 py-2" />
+
+            <input name="aadharNumber" value={formData.aadharNumber}
+              onChange={handleChange} placeholder="Aadhar Number (Optional)"
+              className="border rounded px-3 py-2 col-span-2" />
           </div>
 
-          {/* Petitioner Information */}
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Petitioner Information</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Petition Type
-                </label>
-                <select
-                  value={formData.petitionType}
-                  onChange={(e) => setFormData(prev => ({ ...prev, petitionType: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  <option value="">Select petition type...</option>
-                  {petitionTypes.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </div>
+          <select name="department" value={formData.department}
+            onChange={handleChange} className="border rounded px-3 py-2 w-full">
+            <option value="">Select department</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Petitioner's Name *
-                </label>
-                <input
-                  type="text"
-                  value={formData.petitionerName}
-                  onChange={(e) => setFormData(prev => ({ ...prev, petitionerName: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Enter petitioner's full name"
-                  required
-                />
-              </div>
+          <input name="subject" value={formData.subject}
+            onChange={handleChange} placeholder="Subject"
+            className="border rounded px-3 py-2 w-full" />
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Phone Number *
-                </label>
-                <input
-                  type="tel"
-                  value={formData.phoneNumber}
-                  onChange={(e) => setFormData(prev => ({ ...prev, phoneNumber: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="+91 9876543210"
-                  required
-                />
-              </div>
+          <textarea name="description" value={formData.description}
+            onChange={handleChange} rows={4}
+            placeholder="Detailed description of the petition and required action"
+            className="border rounded px-3 py-2 w-full" />
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email Address
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Enter email address"
-                />
-              </div>
+          <div className="grid grid-cols-3 gap-4">
+            <select name="priority" value={formData.priority}
+              onChange={handleChange} className="border rounded px-3 py-2">
+              <option>Low</option><option>Medium</option><option>High</option>
+            </select>
 
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Aadhar Number (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={formData.aadharNumber}
-                  onChange={(e) => setFormData(prev => ({ ...prev, aadharNumber: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="1234 5678 9012"
-                />
-              </div>
-            </div>
+            <input type="date" name="expiryDate"
+              value={formData.expiryDate} onChange={handleChange}
+              className="border rounded px-3 py-2" />
+
+            <select name="assignedTo" value={formData.assignedTo}
+              onChange={handleChange} className="border rounded px-3 py-2">
+              <option value="">Select officer</option>
+              {departmentOfficers.map((o: any) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} – {o.role || o.designation}
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* Tappal Details */}
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="isConfidential"
+              checked={formData.isConfidential} onChange={handleChange} />
+            <EyeOff className="h-4 w-4" />
+            Mark as Confidential
+          </label>
+
           <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Tappal Details</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Department *
-                </label>
-                <select
-                  value={formData.department}
-                  onChange={(e) => setFormData(prev => ({ ...prev, department: e.target.value, assignedTo: '' }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
-                >
-                  <option value="">Select department...</option>
-                  {mockDepartments.map(dept => (
-                    <option key={dept.id} value={dept.id}>{dept.name}</option>
-                  ))}
-                </select>
+            <input type="file" multiple onChange={handleFileUpload} />
+            {formData.attachments.map((f, i) => (
+              <div key={i} className="flex justify-between text-sm mt-1">
+                {f.name}
+                <button type="button" onClick={() => removeAttachment(i)}>
+                  <X className="h-4 w-4 text-red-500" />
+                </button>
               </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Subject *
-                </label>
-                <input
-                  type="text"
-                  value={formData.subject}
-                  onChange={(e) => setFormData(prev => ({ ...prev, subject: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Brief subject of the petition"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Description *
-                </label>
-                <textarea
-                  value={formData.description}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                  rows={4}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Detailed description of the petition and required action"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Priority
-                  </label>
-                  <select
-                    value={formData.priority}
-                    onChange={(e) => setFormData(prev => ({ ...prev, priority: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    {priorityOptions.map(priority => (
-                      <option key={priority} value={priority}>{priority}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Expiry Date *
-                  </label>
-                  <input
-                    type="date"
-                    value={formData.expiryDate}
-                    onChange={(e) => setFormData(prev => ({ ...prev, expiryDate: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    min={new Date().toISOString().split('T')[0]}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Assign to Officer *
-                  </label>
-                  <select
-                    value={formData.assignedTo}
-                    onChange={(e) => setFormData(prev => ({ ...prev, assignedTo: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  >
-                    <option value="">Select officer...</option>
-                    {departmentOfficers.map(officer => (
-                      <option key={officer.id} value={officer.id}>
-                        {officer.name} - {getRoleDisplayName(officer.role)} ({officer.department})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Confidential Toggle */}
-              <div className="flex items-center space-x-3">
-                <label className="flex items-center">
-                  <input
-                    type="checkbox"
-                    checked={formData.isConfidential}
-                    onChange={(e) => setFormData(prev => ({ ...prev, isConfidential: e.target.checked }))}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <span className="ml-2 text-sm text-gray-700 flex items-center space-x-1">
-                    <EyeOff className="h-4 w-4" />
-                    <span>Mark as Confidential</span>
-                  </span>
-                </label>
-                <span className="text-xs text-gray-500">(Visible only to you and authorized officers)</span>
-              </div>
-            </div>
+            ))}
           </div>
 
-          {/* File Attachments */}
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">File Attachments</h2>
-            <div className="space-y-3">
-              <div className="flex items-center space-x-3">
-                <input
-                  type="file"
-                  multiple
-                  onChange={handleFileUpload}
-                  className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                  accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.txt"
-                />
-              </div>
-              
-              {/* Display attached files */}
-              {formData.attachments.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-sm font-medium text-gray-700">Attached Files:</p>
-                  <div className="space-y-1">
-                    {formData.attachments.map((fileName, index) => (
-                      <div key={index} className="flex items-center justify-between bg-gray-50 rounded-lg p-2">
-                        <div className="flex items-center space-x-2">
-                          <Paperclip className="h-4 w-4 text-gray-500" />
-                          <span className="text-sm text-gray-700">{fileName}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeAttachment(index)}
-                          className="text-red-500 hover:text-red-700 p-1"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              <p className="text-xs text-gray-500">
-                Supported formats: PDF, DOC, DOCX, JPG, JPEG, PNG, TXT
-              </p>
-            </div>
-          </div>
-
-          {/* Submit Buttons */}
-          <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={handleClear}
-              className="px-6 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 transition-colors"
-            >
+          <div className="flex justify-end gap-3">
+            <button type="reset" className="border px-4 py-2 rounded">
               Clear Form
             </button>
-            <button
-              type="submit"
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
-            >
+            <button type="submit"
+              className="bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2">
               <UserPlus className="h-4 w-4" />
-              <span>Create & Assign Tappal</span>
+              Create & Assign Tappal
             </button>
           </div>
+
         </div>
       </form>
 
-      {/* Instructions */}
-      <div className="bg-blue-50 border border-blue-200 rounded-xl p-6">
-        <div className="flex items-start space-x-3">
-          <FileText className="h-6 w-6 text-blue-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <h3 className="text-lg font-medium text-blue-800 mb-2">Tappal Creation Guidelines</h3>
-            <div className="text-blue-700 space-y-1">
-              <p>• <strong>Petition Linking:</strong> Optionally link to existing petitions or create standalone tappals</p>
-              <p>• <strong>Officer Assignment:</strong> Select appropriate officer based on department and expertise</p>
-              <p>• <strong>Confidential Marking:</strong> Use for sensitive matters (visible only to authorized officers)</p>
-              <p>• <strong>Priority Setting:</strong> Set appropriate priority based on urgency and importance</p>
-              <p>• <strong>File Attachments:</strong> Include all relevant documents and supporting materials</p>
-              <p>• <strong>Expiry Date:</strong> Set realistic deadlines considering complexity and workload</p>
-            </div>
+      <div className="bg-blue-50 border rounded-xl p-6">
+        <div className="flex gap-3">
+          <FileText className="h-6 w-6 text-blue-600" />
+          <div className="text-blue-700 text-sm space-y-1">
+            <p>• Select appropriate officer based on department</p>
+            <p>• Use confidential marking carefully</p>
+            <p>• Attach all required supporting documents</p>
+            <p>• Set realistic expiry dates</p>
           </div>
         </div>
       </div>
