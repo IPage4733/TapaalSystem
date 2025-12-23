@@ -304,12 +304,21 @@ function App() {
             {/* Clerk Dashboard Routes */}
             
             {/* Other Protected Dashboard Routes */}
+              <Route
+              path="/tappal/:tappalId/movement"
+              element={
+                <ProtectedRoute>
+                  <TappalDetail />
+                </ProtectedRoute>
+              }
+            />
             <Route 
               path="/joint-collector-dashboard" 
               element={
                 <ProtectedRoute allowedRoles={['joint_collector']}>
                   <JointCollectorDashboard />
                 </ProtectedRoute>
+                
               } 
             />
             <Route 
