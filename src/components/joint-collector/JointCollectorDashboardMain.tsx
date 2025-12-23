@@ -1,301 +1,250 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  FileText, 
-  Clock, 
-  Users, 
+import {
+  FileText,
+  Clock,
+  Users,
   AlertTriangle,
-  CheckCircle,
-  ArrowRight,
   Calendar,
   User,
   Building,
   BarChart3,
-  ScrollText
+  ScrollText,
+  Send,
+  Search
 } from 'lucide-react';
-import { mockTappals, mockDepartments } from '../../data/mockTappals';
-import { mockUsers } from '../../data/mockUsers';
 import { useAuth } from '../../context/AuthContext';
 import { formatDate, isOverdue, getStatusColor } from '../../utils/dateUtils';
+
+const OFFICER_API = 'https://ls82unr468.execute-api.ap-southeast-1.amazonaws.com/dev/officer';
+const TAPPAL_API  = 'https://ik4vdwlkxb.execute-api.ap-southeast-1.amazonaws.com/prod/tappals';
+
+const ROLES_UNDER_JC = [
+  'dro','DRO','rdo','RDO','tahsildar','Tahsildar',
+  'tashildhar','Revenue Inspector','REVENUE INSPECTOR',
+  'Village Revenue Officer','officer','Officer',
+  'co-officer','Co-Officer'
+];
 
 const JointCollectorDashboardMain: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // Get officers below Joint Collector (excluding collector and joint_collector)
-  const officersBelow = useMemo(() => {
-    return mockUsers.filter(u => 
-      u.role !== 'collector' && 
-      u.role !== 'joint_collector'
-    );
+  const [officers, setOfficers] = useState<any[]>([]);
+  const [tappals, setTappals] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] =
+    useState<'assigned-to-jc' | 'assigned-to-officers'>('assigned-to-jc');
+
+  /* ================= FETCH OFFICERS ================= */
+  useEffect(() => {
+    const fetchOfficers = async () => {
+      const res = await fetch(OFFICER_API);
+      const json = await res.json();
+      const jcOfficers = (json.officers || []).filter((o: any) =>
+        ROLES_UNDER_JC.includes(o.role)
+      );
+      setOfficers(jcOfficers);
+    };
+    fetchOfficers();
   }, []);
 
-  // Get tappals assigned to JC
-  const myTappals = useMemo(() => {
-    return mockTappals.filter(t => t.assignedTo === user?.id);
-  }, [user]);
+  /* ================= FETCH TAPPALS ================= */
+  useEffect(() => {
+    const fetchTappals = async () => {
+      try {
+        const res = await fetch(TAPPAL_API);
+        const data = await res.json();
+        setTappals(data);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchTappals();
+  }, []);
 
-  // Get tappals assigned to officers below JC
-  const officerTappals = useMemo(() => {
-    const officerIds = officersBelow.map(o => o.id);
-    return mockTappals.filter(t => officerIds.includes(t.assignedTo));
-  }, [officersBelow]);
+  /* ================= DATA ================= */
+  const officerIds = useMemo(() => officers.map(o => o.id), [officers]);
 
-  // Calculate stats
-  const totalTappalsUnderJC = myTappals.length + officerTappals.length;
-  const overdueTappalsUnderJC = [...myTappals, ...officerTappals].filter(t => 
+  const tappalsAssignedToJC = useMemo(
+    () => tappals.filter((t: any) => t.assignedTo === user?.id),
+    [tappals, user]
+  );
+
+  const tappalsUnderJC = useMemo(
+    () => tappals.filter((t: any) => officerIds.includes(t.assignedTo)),
+    [tappals, officerIds]
+  );
+
+  const totalTappalsUnderJC = [...tappalsAssignedToJC, ...tappalsUnderJC];
+
+  const overdueCount = totalTappalsUnderJC.filter((t: any) =>
     isOverdue(t.expiryDate, t.status)
   ).length;
-  const officersSupervised = officersBelow.length;
-  const tappalsAssignedToJC = myTappals.length;
 
-  // Get recent tappals (latest 5 from both categories)
-  const recentTappals = useMemo(() => {
-    const allTappals = [...myTappals, ...officerTappals];
-    return allTappals
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 5);
-  }, [myTappals, officerTappals]);
+  const displayTappals =
+    viewMode === 'assigned-to-jc' ? tappalsAssignedToJC : tappalsUnderJC;
 
-  const [viewMode, setViewMode] = React.useState<'assigned-to-jc' | 'assigned-to-officers'>('assigned-to-jc');
+  const openTappal = (id: string) => navigate(`/tappal/${id}`);
 
-  const displayTappals = viewMode === 'assigned-to-jc' ? myTappals : officerTappals;
-
-  const handleTappalClick = (tappalId: string) => {
-    navigate(`/tappal/${tappalId}`);
-  };
-
-  const quickLinks = [
-    {
-      title: 'Track Petitions',
-      description: 'Monitor citizen petitions',
-      icon: ScrollText,
-      path: '/joint-collector-dashboard/petitions',
-      color: 'emerald'
-    },
-    {
-      title: 'All Tappals',
-      description: 'View all system tappals',
-      icon: FileText,
-      path: '/joint-collector-dashboard/all-tappals',
-      color: 'violet'
-    },
-    {
-      title: 'My Assigned Tappals',
-      description: 'Tappals assigned to me',
-      icon: FileText,
-      path: '/joint-collector-dashboard/my-tappals',
-      color: 'indigo',
-      count: myTappals.length
-    },
-    {
-      title: 'Officer-wise Tracker',
-      description: 'Track officer assignments',
-      icon: Users,
-      path: '/joint-collector-dashboard/officer-tappals',
-      color: 'blue',
-      count: officerTappals.length
-    },
-    {
-      title: 'Forward Tappals',
-      description: 'Forward my tappals',
-      icon: FileText,
-      path: '/joint-collector-dashboard/forward-tappal',
-      color: 'green'
-    },
-    {
-      title: 'Overdue Tappals',
-      description: 'Manage overdue items',
-      icon: Clock,
-      path: '/joint-collector-dashboard/overdue',
-      color: 'red',
-      count: overdueTappalsUnderJC
-    },
-    {
-      title: 'Performance Analytics',
-      description: 'Officer performance',
-      icon: BarChart3,
-      path: '/joint-collector-dashboard/analytics',
-      color: 'purple'
-    },
-    {
-      title: 'Global Search',
-      description: 'Search all records',
-      icon: FileText,
-      path: '/joint-collector-dashboard/search',
-      color: 'teal'
-    }
-  ];
+  if (loading) return <div className="p-6">Loading dashboard...</div>;
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm p-6">
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">Joint Collector Dashboard</h1>
-        <p className="text-gray-600">Monitor and manage tappals under your supervision</p>
+    <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
+
+      {/* HEADER */}
+      <div className="bg-white rounded-xl p-6">
+        <h1 className="text-2xl font-bold">Joint Collector Dashboard</h1>
+        <p className="text-gray-600 mt-1">
+          Monitor and manage tappals under your supervision
+        </p>
       </div>
 
-      {/* Stats Grid */}
+      {/* STATS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Total Tappals under JC</p>
-              <p className="text-2xl font-bold text-gray-900">{totalTappalsUnderJC}</p>
-            </div>
-            <div className="p-3 bg-indigo-100 rounded-full">
-              <FileText className="h-6 w-6 text-indigo-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Overdue Tappals</p>
-              <p className="text-2xl font-bold text-red-600">{overdueTappalsUnderJC}</p>
-            </div>
-            <div className="p-3 bg-red-100 rounded-full">
-              <AlertTriangle className="h-6 w-6 text-red-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Officers Supervised</p>
-              <p className="text-2xl font-bold text-blue-600">{officersSupervised}</p>
-            </div>
-            <div className="p-3 bg-blue-100 rounded-full">
-              <Users className="h-6 w-6 text-blue-600" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Assigned to JC</p>
-              <p className="text-2xl font-bold text-indigo-600">{tappalsAssignedToJC}</p>
-            </div>
-            <div className="p-3 bg-indigo-100 rounded-full">
-              <User className="h-6 w-6 text-indigo-600" />
-            </div>
-          </div>
-        </div>
+        <StatCard title="Total Tappals under JC" value={totalTappalsUnderJC.length} icon={FileText} />
+        <StatCard title="Overdue Tappals" value={overdueCount} icon={AlertTriangle} danger />
+        <StatCard title="Officers Supervised" value={officers.length} icon={Users} blue />
+        <StatCard title="Assigned to JC" value={tappalsAssignedToJC.length} icon={User} purple />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Tappals */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Tappals</h2>
-            <div className="flex items-center space-x-2">
-              <button
+
+        {/* RECENT TAPPALS */}
+        <div className="bg-white rounded-xl p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-lg font-semibold">Recent Tappals</h2>
+            <div className="flex gap-2">
+              <ToggleButton
+                active={viewMode === 'assigned-to-jc'}
                 onClick={() => setViewMode('assigned-to-jc')}
-                className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
-                  viewMode === 'assigned-to-jc'
-                    ? 'bg-indigo-100 text-indigo-700'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Assigned to JC
-              </button>
-              <button
+                text="Assigned to JC"
+              />
+              <ToggleButton
+                active={viewMode === 'assigned-to-officers'}
                 onClick={() => setViewMode('assigned-to-officers')}
-                className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
-                  viewMode === 'assigned-to-officers'
-                    ? 'bg-indigo-100 text-indigo-700'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                Assigned to Officers
-              </button>
+                text="Assigned to Officers"
+              />
             </div>
           </div>
-          
-          <div className="space-y-3">
-            {displayTappals.slice(0, 5).map((tappal) => (
-              <div
-                key={tappal.id}
-                className="p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                onClick={() => handleTappalClick(tappal.tappalId)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-900 text-sm">{tappal.tappalId}</p>
-                    <p className="text-gray-600 text-sm truncate">{tappal.subject}</p>
-                    <div className="flex items-center space-x-4 mt-2">
-                      <div className="flex items-center space-x-1">
-                        <User className="h-3 w-3 text-gray-400" />
-                        <span className="text-xs text-gray-500">{tappal.assignedToName}</span>
+
+          {displayTappals.length === 0 ? (
+            <div className="text-center py-20 text-gray-500">
+              <FileText className="mx-auto mb-3 h-12 w-12 text-gray-300" />
+              No tappals assigned to you
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {displayTappals.slice(0, 5).map((t: any) => {
+                const rawStatus = String(t.status || '').trim().toLowerCase();
+                const fullClass = getStatusColor(t.status);
+                // For 'in progress', 'forward', 'pending', 'active', and 'completed' statuses, remove background classes
+                const stripBg = rawStatus.includes('in progress') || rawStatus.includes('in_progress') || rawStatus.includes('inprogress') || rawStatus.includes('forward') || rawStatus.includes('pending') || rawStatus.includes('active') || rawStatus.includes('completed');
+                const statusClass = stripBg ? (fullClass.split(' ').find(p => p.startsWith('text-')) || 'text-gray-600') : fullClass;
+
+                return (
+                  <div
+                    key={t.tappalId}
+                    onClick={() => openTappal(t.tappalId)}
+                    className="border rounded-lg p-4 hover:bg-gray-50 cursor-pointer"
+                  >
+                    <div className="flex justify-between">
+                      <div>
+                        <p className="font-medium">{t.tappalId}</p>
+                        <p className="text-sm text-gray-600 truncate">{t.subject}</p>
+                        <div className="flex gap-4 mt-2 text-xs text-gray-500">
+                          <span className="flex gap-1 items-center">
+                            <User className="h-3 w-3" /> {t.assignedToName}
+                          </span>
+                          <span className="flex gap-1 items-center">
+                            <Building className="h-3 w-3" /> {t.department || t.departmentName}
+                          </span>
+                          <span className="flex gap-1 items-center">
+                            <Calendar className="h-3 w-3" /> {formatDate(t.createdAt)}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center space-x-1">
-                        <Building className="h-3 w-3 text-gray-400" />
-                        <span className="text-xs text-gray-500">{tappal.departmentName}</span>
-                      </div>
-                      <div className="flex items-center space-x-1">
-                        <Calendar className="h-3 w-3 text-gray-400" />
-                        <span className="text-xs text-gray-500">{formatDate(tappal.createdAt)}</span>
-                      </div>
+
+                      {/* STATUS – SAME POSITION, NO BG for in-progress/forward */}
+                      <span className={`px-3 py-1 text-xs rounded-full ${statusClass}`}>
+                        {t.status}
+                      </span>
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(tappal.status)}`}>
-                    {tappal.status}
-                  </span>
-                </div>
-              </div>
-            ))}
-            
-            {displayTappals.length === 0 && (
-              <div className="text-center py-8">
-                <FileText className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-500">
-                  {viewMode === 'assigned-to-jc' 
-                    ? 'No tappals assigned to you' 
-                    : 'No tappals assigned to officers below you'
-                  }
-                </p>
-              </div>
-            )}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Quick Links */}
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Access</h2>
-          <div className="grid grid-cols-1 gap-3">
-            {quickLinks.map((link) => {
-              const Icon = link.icon;
-              return (
-                <button
-                  key={link.path}
-                  onClick={() => navigate(link.path)}
-                  className={`p-4 rounded-lg border border-gray-200 hover:border-${link.color}-300 hover:bg-${link.color}-50 transition-colors text-left group flex items-center justify-between`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className={`p-2 bg-${link.color}-100 rounded-lg group-hover:bg-${link.color}-200 transition-colors`}>
-                      <Icon className={`h-5 w-5 text-${link.color}-600`} />
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-gray-900 text-sm">{link.title}</h3>
-                      <p className="text-xs text-gray-500 mt-1">{link.description}</p>
-                    </div>
-                  </div>
-                  {link.count !== undefined && (
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium bg-${link.color}-100 text-${link.color}-700`}>
-                      {link.count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+        {/* QUICK ACCESS */}
+        <div className="bg-white rounded-xl p-6">
+          <h2 className="text-lg font-semibold mb-4">Quick Access</h2>
+
+          <QuickLink title="Track Petitions" icon={ScrollText} iconBg="bg-green-100" iconColor="text-green-600" onClick={() => navigate('petitions')} />
+          <QuickLink title="All Tappals" icon={FileText} iconBg="bg-gray-100" iconColor="text-gray-700" onClick={() => navigate('all-tappals')} />
+          <QuickLink title="My Assigned Tappals" icon={FileText} count={tappalsAssignedToJC.length} iconBg="bg-indigo-100" iconColor="text-indigo-600" onClick={() => navigate('my-tappals')} />
+          <QuickLink title="Officer-wise Tracker" icon={Users} count={tappalsUnderJC.length} iconBg="bg-blue-100" iconColor="text-blue-600" onClick={() => navigate('officer-tappals')} />
+          <QuickLink title="Overdue Tappals" icon={Clock} count={overdueCount} bg="bg-red-50" iconBg="bg-red-100" iconColor="text-red-600" onClick={() => navigate('overdue')} />
+          <QuickLink title="Performance Analytics" icon={BarChart3} iconBg="bg-purple-100" iconColor="text-purple-600" onClick={() => navigate('analytics')} />
+          <QuickLink title="Global Search" icon={Search} iconBg="bg-teal-100" iconColor="text-teal-600" onClick={() => navigate('search')} />
         </div>
+
       </div>
     </div>
   );
 };
 
+/* ================= UI COMPONENTS ================= */
+
+const StatCard = ({ title, value, icon: Icon, danger, blue, purple }: any) => {
+  const color =
+    danger ? 'red' : blue ? 'blue' : purple ? 'indigo' : 'indigo';
+
+  return (
+    <div className="bg-white rounded-xl p-6 flex justify-between items-center">
+      <div>
+        <p className="text-sm text-gray-600">{title}</p>
+        <p className={`text-2xl font-bold text-${color}-600`}>
+          {value}
+        </p>
+      </div>
+      <div className={`p-3 rounded-full bg-${color}-100`}>
+        <Icon className={`h-6 w-6 text-${color}-600`} />
+      </div>
+    </div>
+  );
+};
+
+const ToggleButton = ({ active, onClick, text }: any) => (
+  <button
+    onClick={onClick}
+    className={`px-4 py-1.5 rounded-full text-sm font-medium ${
+      active ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700'
+    }`}
+  >
+    {text}
+  </button>
+);
+
+const QuickLink = ({ title, icon: Icon, onClick, count, bg, iconBg, iconColor }: any) => (
+  <button
+    onClick={onClick}
+    className={`w-full border rounded-lg p-4 flex justify-between items-center mb-2 ${bg || 'bg-white hover:bg-gray-50'}`}
+  >
+    <div className="flex items-center gap-3">
+      <div className={`p-2 rounded-lg ${iconBg}`}>
+        <Icon className={`h-5 w-5 ${iconColor}`} />
+      </div>
+      <span className="font-medium">{title}</span>
+    </div>
+    {count !== undefined && (
+      <span className="text-sm font-semibold text-indigo-700">
+        {count}
+      </span>
+    )}
+  </button>
+);
+
 export default JointCollectorDashboardMain;
+
